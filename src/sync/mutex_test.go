@@ -71,6 +71,18 @@ func TestMutex(t *testing.T) {
 	}
 }
 
+func TestMutexTryLock(t *testing.T) {
+	m := new(Mutex)
+	m.Lock()
+	if m.TryLock() {
+		t.Fatal("TryLock was lock the mutex when it already locked")
+	}
+	m.Unlock()
+	if !m.TryLock() {
+		t.Fatal("TryLock cannot lock the mutex when it inlocked")
+	}
+}
+
 func TestMutexPanic(t *testing.T) {
 	defer func() {
 		if recover() == nil {

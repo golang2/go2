@@ -36,6 +36,21 @@ const (
 	mutexWaiterShift = iota
 )
 
+// TryLock try locks m.
+// If the lock is already in use, the calling goroutine
+// receive false from TryLock before the mutex will be
+// available. Otherwise TryLock return true.
+func (m *Mutex) TryLock() bool {
+	// Fast path: grab unlocked mutex.
+	if atomic.CompareAndSwapInt32(&m.state, 0, mutexLocked) {
+		if race.Enabled {
+			race.Acquire(unsafe.Pointer(m))
+		}
+		return true
+	}
+	return false
+}
+
 // Lock locks m.
 // If the lock is already in use, the calling goroutine
 // blocks until the mutex is available.
