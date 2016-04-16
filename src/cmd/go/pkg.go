@@ -405,7 +405,7 @@ func isDir(path string) bool {
 // x/vendor/path, vendor/path, or else stay path if none of those exist.
 // vendoredImportPath returns the expanded path or, if no expansion is found, the original.
 func vendoredImportPath(parent *Package, path string) (found string) {
-	if parent == nil {
+	if parent == nil || parent.Root == "" {
 		return path
 	}
 
