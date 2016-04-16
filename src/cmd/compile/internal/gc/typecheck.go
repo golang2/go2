@@ -11,6 +11,20 @@ import (
 	"strings"
 )
 
+const (
+	Etop      = 1 << 1 // evaluated at statement level
+	Erv       = 1 << 2 // evaluated in value context
+	Etype     = 1 << 3
+	Ecall     = 1 << 4  // call-only expressions are ok
+	Efnstruct = 1 << 5  // multivalue function returns are ok
+	Eiota     = 1 << 6  // iota is ok
+	Easgn     = 1 << 7  // assigning to expression
+	Eindir    = 1 << 8  // indirecting through expression
+	Eaddr     = 1 << 9  // taking address of expression
+	Eproc     = 1 << 10 // inside a go statement
+	Ecomplit  = 1 << 11 // type in composite literal
+)
+
 // type check the whole tree of an expression.
 // calculates expression types.
 // evaluates compile time constants.
@@ -324,7 +338,6 @@ OpSwitch:
 		ok |= Etype
 
 		if n.Type == nil {
-			n.Type = nil
 			return n
 		}
 
@@ -403,6 +416,18 @@ OpSwitch:
 		}
 		n.Op = OTYPE
 		n.Type = typMap(l.Type, r.Type)
+
+		// map key validation
+		alg, bad := algtype1(l.Type)
+		if alg == ANOEQ {
+			if bad.Etype == TFORW {
+				// queue check for map until all the types are done settling.
+				mapqueue = append(mapqueue, mapqueueval{l, n.Lineno})
+			} else if bad.Etype != TANY {
+				// no need to queue, key is already bad
+				Yyerror("invalid map key type %v", l.Type)
+			}
+		}
 		n.Left = nil
 		n.Right = nil
 
@@ -435,7 +460,6 @@ OpSwitch:
 		n.Op = OTYPE
 		n.Type = tointerface(n.List.Slice())
 		if n.Type == nil {
-			n.Type = nil
 			return n
 		}
 
@@ -444,7 +468,6 @@ OpSwitch:
 		n.Op = OTYPE
 		n.Type = functype(n.Left, n.List.Slice(), n.Rlist.Slice())
 		if n.Type == nil {
-			n.Type = nil
 			return n
 		}
 		n.Left = nil
@@ -808,7 +831,6 @@ OpSwitch:
 		ok |= Erv
 		n = typecheckcomplit(n)
 		if n.Type == nil {
-			n.Type = nil
 			return n
 		}
 		break OpSwitch
@@ -849,7 +871,6 @@ OpSwitch:
 
 			if n.Type.Etype != TFUNC || n.Type.Recv() == nil {
 				Yyerror("type %v has no method %v", n.Left.Type, Sconv(n.Right.Sym, FmtShort))
-				n.Type = nil
 				n.Type = nil
 				return n
 			}
@@ -1333,7 +1354,7 @@ OpSwitch:
 		if t.Results().NumFields() == 1 {
 			n.Type = l.Type.Results().Field(0).Type
 
-			if n.Op == OCALLFUNC && n.Left.Op == ONAME && (compiling_runtime != 0 || n.Left.Sym.Pkg == Runtimepkg) && n.Left.Sym.Name == "getg" {
+			if n.Op == OCALLFUNC && n.Left.Op == ONAME && (compiling_runtime || n.Left.Sym.Pkg == Runtimepkg) && n.Left.Sym.Name == "getg" {
 				// Emit code for runtime.getg() directly instead of calling function.
 				// Most such rewrites (for example the similar one for math.Sqrt) should be done in walk,
 				// so that the ordering pass can make sure to preserve the semantics of the original code
@@ -1593,7 +1614,7 @@ OpSwitch:
 
 		// Unpack multiple-return result before type-checking.
 		var funarg *Type
-		if t.IsStruct() && t.Funarg {
+		if t.IsFuncArgStruct() {
 			funarg = t
 			t = t.Field(0).Type
 		}
@@ -1947,7 +1968,6 @@ OpSwitch:
 		ok |= Erv
 		typecheckclosure(n, top)
 		if n.Type == nil {
-			n.Type = nil
 			return n
 		}
 		break OpSwitch
@@ -2089,7 +2109,7 @@ OpSwitch:
 			return n
 		}
 
-		if Curfn.Type.Outnamed && n.List.Len() == 0 {
+		if Curfn.Type.FuncType().Outnamed && n.List.Len() == 0 {
 			break OpSwitch
 		}
 		typecheckaste(ORETURN, nil, false, Curfn.Type.Results(), n.List, func() string { return "return argument" })
@@ -2145,14 +2165,10 @@ OpSwitch:
 	}
 
 	t := n.Type
-	if t != nil && !t.Funarg && n.Op != OTYPE {
+	if t != nil && !t.IsFuncArgStruct() && n.Op != OTYPE {
 		switch t.Etype {
-		case TFUNC, // might have TANY; wait until its called
-			TANY,
-			TFORW,
-			TIDEAL,
-			TNIL,
-			TBLANK:
+		case TFUNC, // might have TANY; wait until it's called
+			TANY, TFORW, TIDEAL, TNIL, TBLANK:
 			break
 
 		default:
@@ -2160,7 +2176,7 @@ OpSwitch:
 		}
 	}
 
-	if safemode != 0 && incannedimport == 0 && importpkg == nil && compiling_wrappers == 0 && t != nil && t.Etype == TUNSAFEPTR {
+	if safemode && incannedimport == 0 && importpkg == nil && compiling_wrappers == 0 && t != nil && t.Etype == TUNSAFEPTR {
 		Yyerror("cannot use unsafe.Pointer")
 	}
 
@@ -2597,7 +2613,7 @@ func typecheckaste(op Op, call *Node, isddd bool, tstruct *Type, nl Nodes, desc 
 	if nl.Len() == 1 {
 		n = nl.First()
 		if n.Type != nil {
-			if n.Type.IsStruct() && n.Type.Funarg {
+			if n.Type.IsFuncArgStruct() {
 				if !hasddd(tstruct) {
 					n1 := tstruct.NumFields()
 					n2 := n.Type.NumFields()
@@ -3345,7 +3361,7 @@ func typecheckas2(n *Node) {
 		}
 		switch r.Op {
 		case OCALLMETH, OCALLINTER, OCALLFUNC:
-			if !r.Type.IsStruct() || !r.Type.Funarg {
+			if !r.Type.IsFuncArgStruct() {
 				break
 			}
 			cr = r.Type.NumFields()
@@ -3503,18 +3519,23 @@ func domethod(n *Node) {
 	checkwidth(n.Type)
 }
 
-var mapqueue []*Node
+type mapqueueval struct {
+	n   *Node
+	lno int32
+}
+
+// tracks the line numbers at which forward types are first used as map keys
+var mapqueue []mapqueueval
 
 func copytype(n *Node, t *Type) {
 	if t.Etype == TFORW {
 		// This type isn't computed yet; when it is, update n.
-		t.Copyto = append(t.Copyto, n)
+		t.ForwardType().Copyto = append(t.ForwardType().Copyto, n)
 		return
 	}
 
-	maplineno := n.Type.Maplineno
-	embedlineno := n.Type.Embedlineno
-	l := n.Type.Copyto
+	embedlineno := n.Type.ForwardType().Embedlineno
+	l := n.Type.ForwardType().Copyto
 
 	// TODO(mdempsky): Fix Type rekinding.
 	*n.Type = *t
@@ -3530,7 +3551,6 @@ func copytype(n *Node, t *Type) {
 	t.Nod = nil
 	t.Printed = false
 	t.Deferwidth = false
-	t.Copyto = nil
 
 	// Update nodes waiting on this type.
 	for _, n := range l {
@@ -3548,12 +3568,6 @@ func copytype(n *Node, t *Type) {
 	}
 
 	lineno = lno
-
-	// Queue check for map until all the types are done settling.
-	if maplineno != 0 {
-		t.Maplineno = maplineno
-		mapqueue = append(mapqueue, n)
-	}
 }
 
 func typecheckdeftype(n *Node) {
@@ -3598,12 +3612,13 @@ ret:
 				domethod(n)
 			}
 		}
-
-		for _, n := range mapqueue {
-			lineno = n.Type.Maplineno
-			checkMapKeyType(n.Type)
+		for _, e := range mapqueue {
+			lineno = e.lno
+			if !e.n.Type.IsComparable() {
+				Yyerror("invalid map key type %v", e.n.Type)
+			}
 		}
-
+		mapqueue = nil
 		lineno = lno
 	}
 

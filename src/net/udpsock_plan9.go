@@ -5,10 +5,10 @@
 package net
 
 import (
+	"context"
 	"errors"
 	"os"
 	"syscall"
-	"time"
 )
 
 func (c *UDPConn) readFrom(b []byte) (n int, addr *UDPAddr, err error) {
@@ -55,9 +55,9 @@ func (c *UDPConn) writeMsg(b, oob []byte, addr *UDPAddr) (n, oobn int, err error
 	return 0, 0, syscall.EPLAN9
 }
 
-func dialUDP(net string, laddr, raddr *UDPAddr, deadline time.Time) (*UDPConn, error) {
-	if !deadline.IsZero() {
-		panic("net.dialUDP: deadline not implemented on Plan 9")
+func dialUDP(ctx context.Context, net string, laddr, raddr *UDPAddr) (*UDPConn, error) {
+	if deadline, _ := ctx.Deadline(); !deadline.IsZero() {
+		// TODO: deadline not implemented on Plan 9 (see golang.og/issue/11932)
 	}
 	fd, err := dialPlan9(net, laddr, raddr)
 	if err != nil {
@@ -94,7 +94,7 @@ func unmarshalUDPHeader(b []byte) (*udpHeader, []byte) {
 	return h, b
 }
 
-func listenUDP(network string, laddr *UDPAddr) (*UDPConn, error) {
+func listenUDP(ctx context.Context, network string, laddr *UDPAddr) (*UDPConn, error) {
 	l, err := listenPlan9(network, laddr)
 	if err != nil {
 		return nil, err
@@ -111,6 +111,6 @@ func listenUDP(network string, laddr *UDPAddr) (*UDPConn, error) {
 	return newUDPConn(fd), err
 }
 
-func listenMulticastUDP(network string, ifi *Interface, gaddr *UDPAddr) (*UDPConn, error) {
+func listenMulticastUDP(ctx context.Context, network string, ifi *Interface, gaddr *UDPAddr) (*UDPConn, error) {
 	return nil, syscall.EPLAN9
 }

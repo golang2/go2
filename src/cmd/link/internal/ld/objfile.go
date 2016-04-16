@@ -110,6 +110,7 @@ package ld
 import (
 	"bufio"
 	"bytes"
+	"cmd/internal/bio"
 	"cmd/internal/obj"
 	"io"
 	"log"
@@ -146,18 +147,18 @@ type objReader struct {
 	file        []*LSym
 }
 
-func LoadObjFile(ctxt *Link, f *obj.Biobuf, pkg string, length int64, pn string) {
-	start := obj.Boffset(f)
+func LoadObjFile(ctxt *Link, f *bio.Reader, pkg string, length int64, pn string) {
+	start := f.Offset()
 	r := &objReader{
-		rd:     f.Reader(),
+		rd:     f.Reader,
 		pkg:    pkg,
 		ctxt:   ctxt,
 		pn:     pn,
 		dupSym: &LSym{Name: ".dup"},
 	}
 	r.loadObjFile()
-	if obj.Boffset(f) != start+length {
-		log.Fatalf("%s: unexpected end at %d, want %d", pn, int64(obj.Boffset(f)), int64(start+length))
+	if f.Offset() != start+length {
+		log.Fatalf("%s: unexpected end at %d, want %d", pn, f.Offset(), start+length)
 	}
 }
 
@@ -330,8 +331,11 @@ overwrite:
 	}
 
 	if s.Type == obj.STEXT {
-		s.Args = r.readInt32()
-		s.Locals = r.readInt32()
+		s.FuncInfo = new(FuncInfo)
+		pc := s.FuncInfo
+
+		pc.Args = r.readInt32()
+		pc.Locals = r.readInt32()
 		if r.readUint8() != 0 {
 			s.Attr |= AttrNoSplit
 		}
@@ -340,13 +344,13 @@ overwrite:
 			s.Attr |= AttrReflectMethod
 		}
 		n := r.readInt()
-		s.Autom = r.autom[:n:n]
+		pc.Autom = r.autom[:n:n]
 		if !isdup {
 			r.autom = r.autom[n:]
 		}
 
 		for i := 0; i < n; i++ {
-			s.Autom[i] = Auto{
+			pc.Autom[i] = Auto{
 				Asym:    r.readSymIndex(),
 				Aoffset: r.readInt32(),
 				Name:    r.readInt16(),
@@ -354,8 +358,6 @@ overwrite:
 			}
 		}
 
-		s.Pcln = new(Pcln)
-		pc := s.Pcln
 		pc.Pcsp.P = r.readData()
 		pc.Pcfile.P = r.readData()
 		pc.Pcline.P = r.readData()
@@ -470,7 +472,7 @@ func (r *objReader) readInt64() int64 {
 		}
 	}
 
-	return int64(uv>>1) ^ (int64(uint64(uv)<<63) >> 63)
+	return int64(uv>>1) ^ (int64(uv<<63) >> 63)
 }
 
 func (r *objReader) readInt() int {
@@ -529,12 +531,17 @@ func (r *objReader) readSymName() string {
 		r.readInt64()
 		return ""
 	}
-	origName, err := r.rd.Peek(n)
-	if err != nil {
-		log.Fatalf("%s: unexpectedly long symbol name", r.pn)
-	}
 	if cap(r.rdBuf) < n {
 		r.rdBuf = make([]byte, 2*n)
+	}
+	origName, err := r.rd.Peek(n)
+	if err == bufio.ErrBufferFull {
+		// Long symbol names are rare but exist. One source is type
+		// symbols for types with long string forms. See #15104.
+		origName = make([]byte, n)
+		r.readFull(origName)
+	} else if err != nil {
+		log.Fatalf("%s: error reading symbol: %v", err)
 	}
 	adjName := r.rdBuf[:0]
 	for {
@@ -544,7 +551,9 @@ func (r *objReader) readSymName() string {
 			// Read past the peeked origName, now that we're done with it,
 			// using the rfBuf (also no longer used) as the scratch space.
 			// TODO: use bufio.Reader.Discard if available instead?
-			r.readFull(r.rdBuf[:n])
+			if err == nil {
+				r.readFull(r.rdBuf[:n])
+			}
 			r.rdBuf = adjName[:0] // in case 2*n wasn't enough
 			return s
 		}

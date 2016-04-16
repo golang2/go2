@@ -7,7 +7,7 @@ package gc
 import (
 	"bufio"
 	"bytes"
-	"cmd/internal/obj"
+	"cmd/internal/bio"
 	"fmt"
 	"sort"
 	"unicode"
@@ -15,8 +15,8 @@ import (
 )
 
 var (
-	newexport    int // if set, use new export format
-	Debug_export int // if set, print debugging information about export data
+	newexport    bool // if set, use new export format
+	Debug_export int  // if set, print debugging information about export data
 	exportsize   int
 )
 
@@ -377,15 +377,15 @@ func dumpexport() {
 	}
 
 	size := 0 // size of export section without enclosing markers
-	if forceNewExport || newexport != 0 {
+	if forceNewExport || newexport {
 		// binary export
 		// The linker also looks for the $$ marker - use char after $$ to distinguish format.
 		exportf("\n$$B\n") // indicate binary format
 		if debugFormat {
 			// save a copy of the export data
 			var copy bytes.Buffer
-			bcopy := obj.Binitw(&copy)
-			size = Export(bcopy, Debug_export != 0)
+			bcopy := bufio.NewWriter(&copy)
+			size = export(bcopy, Debug_export != 0)
 			bcopy.Flush() // flushing to bytes.Buffer cannot fail
 			if n, err := bout.Write(copy.Bytes()); n != size || err != nil {
 				Fatalf("error writing export data: got %d bytes, want %d bytes, err = %v", n, size, err)
@@ -407,7 +407,7 @@ func dumpexport() {
 			pkgs = savedPkgs
 			pkgMap = savedPkgMap
 		} else {
-			size = Export(bout, Debug_export != 0)
+			size = export(bout.Writer, Debug_export != 0)
 		}
 		exportf("\n$$\n")
 	} else {
@@ -417,7 +417,7 @@ func dumpexport() {
 		exportf("\n$$\n") // indicate textual format
 		exportsize = 0
 		exportf("package %s", localpkg.Name)
-		if safemode != 0 {
+		if safemode {
 			exportf(" safe")
 		}
 		exportf("\n")
@@ -577,7 +577,7 @@ func importtype(pt *Type, t *Type) {
 }
 
 func dumpasmhdr() {
-	b, err := obj.Bopenw(asmhdr)
+	b, err := bio.Create(asmhdr)
 	if err != nil {
 		Fatalf("%v", err)
 	}
@@ -592,7 +592,7 @@ func dumpasmhdr() {
 
 		case OTYPE:
 			t := n.Type
-			if !t.IsStruct() || t.Map != nil || t.Funarg {
+			if !t.IsStruct() || t.StructType().Map != nil || t.IsFuncArgStruct() {
 				break
 			}
 			fmt.Fprintf(b, "#define %s__size %d\n", t.Sym.Name, int(t.Width))
@@ -604,5 +604,5 @@ func dumpasmhdr() {
 		}
 	}
 
-	obj.Bterm(b)
+	b.Close()
 }

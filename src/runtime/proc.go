@@ -381,7 +381,7 @@ func badmcall2(fn func(*g)) {
 }
 
 func badreflectcall() {
-	panic("runtime: arg size to reflect.call more than 1GB")
+	panic(plainError("arg size to reflect.call more than 1GB"))
 }
 
 func lockedOSThread() bool {
@@ -435,9 +435,10 @@ func schedinit() {
 	tracebackinit()
 	moduledataverify()
 	stackinit()
-	itabsinit()
 	mallocinit()
 	mcommoninit(_g_.m)
+	typelinksinit()
+	itabsinit()
 
 	msigsave(_g_.m)
 	initSigmask = _g_.m.sigmask
@@ -449,6 +450,9 @@ func schedinit() {
 
 	sched.lastpoll = uint64(nanotime())
 	procs := int(ncpu)
+	if procs > _MaxGomaxprocs {
+		procs = _MaxGomaxprocs
+	}
 	if n := atoi(gogetenv("GOMAXPROCS")); n > 0 {
 		if n > _MaxGomaxprocs {
 			n = _MaxGomaxprocs

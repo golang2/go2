@@ -1377,28 +1377,6 @@ func TestInstallToGOBINCommandLinePackage(t *testing.T) {
 	tg.wantExecutable("testdata/bin1/helloworld"+exeSuffix, "go install testdata/src/go-cmd-test/helloworld.go did not write testdata/bin1/helloworld")
 }
 
-func TestGodocInstalls(t *testing.T) {
-	testenv.MustHaveExternalNetwork(t)
-
-	// godoc installs into GOBIN
-	tg := testgo(t)
-	defer tg.cleanup()
-	tg.parallel()
-	tg.tempDir("gobin")
-	tg.setenv("GOPATH", tg.path("."))
-	tg.setenv("GOBIN", tg.path("gobin"))
-	tg.run("get", "golang.org/x/tools/cmd/godoc")
-	tg.wantExecutable(tg.path("gobin/godoc"), "did not install godoc to $GOBIN")
-	tg.unsetenv("GOBIN")
-
-	// godoc installs into GOROOT
-	goroot := runtime.GOROOT()
-	tg.setenv("GOROOT", goroot)
-	tg.check(os.RemoveAll(filepath.Join(goroot, "bin", "godoc")))
-	tg.run("install", "golang.org/x/tools/cmd/godoc")
-	tg.wantExecutable(filepath.Join(goroot, "bin", "godoc"), "did not install godoc to $GOROOT/bin")
-}
-
 func TestGoGetNonPkg(t *testing.T) {
 	testenv.MustHaveExternalNetwork(t)
 
@@ -1488,7 +1466,7 @@ func TestGoTestWithPackageListedMultipleTimes(t *testing.T) {
 	defer tg.cleanup()
 	tg.parallel()
 	tg.run("test", "errors", "errors", "errors", "errors", "errors")
-	if strings.Index(strings.TrimSpace(tg.getStdout()), "\n") != -1 {
+	if strings.Contains(strings.TrimSpace(tg.getStdout()), "\n") {
 		t.Error("go test errors errors errors errors errors tested the same package multiple times")
 	}
 }
@@ -1517,7 +1495,7 @@ func TestGoListCmdOnlyShowsCommands(t *testing.T) {
 	tg.run("list", "cmd")
 	out := strings.TrimSpace(tg.getStdout())
 	for _, line := range strings.Split(out, "\n") {
-		if strings.Index(line, "cmd/") == -1 {
+		if !strings.Contains(line, "cmd/") {
 			t.Error("go list cmd shows non-commands")
 			break
 		}
@@ -2320,8 +2298,7 @@ func TestGoVetWithExternalTests(t *testing.T) {
 	tg := testgo(t)
 	defer tg.cleanup()
 	tg.makeTempdir()
-	tg.setenv("GOPATH", tg.path("."))
-	tg.run("get", "golang.org/x/tools/cmd/vet")
+	tg.run("install", "cmd/vet")
 	tg.setenv("GOPATH", filepath.Join(tg.pwd(), "testdata"))
 	tg.runFail("vet", "vetpkg")
 	tg.grepBoth("missing argument for Printf", "go vet vetpkg did not find missing argument for Printf")
@@ -2333,8 +2310,7 @@ func TestGoVetWithTags(t *testing.T) {
 	tg := testgo(t)
 	defer tg.cleanup()
 	tg.makeTempdir()
-	tg.setenv("GOPATH", tg.path("."))
-	tg.run("get", "golang.org/x/tools/cmd/vet")
+	tg.run("install", "cmd/vet")
 	tg.setenv("GOPATH", filepath.Join(tg.pwd(), "testdata"))
 	tg.runFail("vet", "-tags", "tagtest", "vetpkg")
 	tg.grepBoth(`c\.go.*wrong number of args for format`, "go get vetpkg did not run scan tagged file")

@@ -434,6 +434,12 @@ func vendoredImportPath(parent *Package, path string) (found string) {
 		}
 		targ := filepath.Join(dir[:i], vpath)
 		if isDir(targ) && hasGoFiles(targ) {
+			importPath := parent.ImportPath
+			if importPath == "command-line-arguments" {
+				// If parent.ImportPath is 'command-line-arguments'.
+				// set to relative directory to root (also chopped root directory)
+				importPath = dir[len(root)+1:]
+			}
 			// We started with parent's dir c:\gopath\src\foo\bar\baz\quux\xyzzy.
 			// We know the import path for parent's dir.
 			// We chopped off some number of path elements and
@@ -443,14 +449,14 @@ func vendoredImportPath(parent *Package, path string) (found string) {
 			// (actually the same number of bytes) from parent's import path
 			// and then append /vendor/path.
 			chopped := len(dir) - i
-			if chopped == len(parent.ImportPath)+1 {
+			if chopped == len(importPath)+1 {
 				// We walked up from c:\gopath\src\foo\bar
 				// and found c:\gopath\src\vendor\path.
 				// We chopped \foo\bar (length 8) but the import path is "foo/bar" (length 7).
 				// Use "vendor/path" without any prefix.
 				return vpath
 			}
-			return parent.ImportPath[:len(parent.ImportPath)-chopped] + "/" + vpath
+			return importPath[:len(importPath)-chopped] + "/" + vpath
 		}
 	}
 	return path
@@ -517,7 +523,7 @@ func disallowInternal(srcDir string, p *Package, stk *importStack) *Package {
 		return p
 	}
 
-	// Check for "internal" element: four cases depending on begin of string and/or end of string.
+	// Check for "internal" element: three cases depending on begin of string and/or end of string.
 	i, ok := findInternal(p.ImportPath)
 	if !ok {
 		return p
@@ -554,7 +560,7 @@ func disallowInternal(srcDir string, p *Package, stk *importStack) *Package {
 // If there isn't one, findInternal returns ok=false.
 // Otherwise, findInternal returns ok=true and the index of the "internal".
 func findInternal(path string) (index int, ok bool) {
-	// Four cases, depending on internal at start/end of string or not.
+	// Three cases, depending on internal at start/end of string or not.
 	// The order matters: we must return the index of the final element,
 	// because the final one produces the most restrictive requirement
 	// on the importer.
@@ -652,7 +658,7 @@ func disallowVendorVisibility(srcDir string, p *Package, stk *importStack) *Pack
 
 // findVendor looks for the last non-terminating "vendor" path element in the given import path.
 // If there isn't one, findVendor returns ok=false.
-// Otherwise, findInternal returns ok=true and the index of the "vendor".
+// Otherwise, findVendor returns ok=true and the index of the "vendor".
 //
 // Note that terminating "vendor" elements don't count: "x/vendor" is its own package,
 // not the vendored copy of an import "" (the empty import path).
@@ -676,7 +682,6 @@ type targetDir int
 const (
 	toRoot    targetDir = iota // to bin dir inside package root (default)
 	toTool                     // GOROOT/pkg/tool
-	toBin                      // GOROOT/bin
 	stalePath                  // the old import path; fail to build
 )
 
@@ -700,7 +705,6 @@ var goTools = map[string]targetDir{
 	"cmd/trace":                            toTool,
 	"cmd/vet":                              toTool,
 	"cmd/yacc":                             toTool,
-	"golang.org/x/tools/cmd/godoc":         toBin,
 	"code.google.com/p/go.tools/cmd/cover": stalePath,
 	"code.google.com/p/go.tools/cmd/godoc": stalePath,
 	"code.google.com/p/go.tools/cmd/vet":   stalePath,
@@ -787,12 +791,7 @@ func (p *Package) load(stk *importStack, bp *build.Package, err error) *Package 
 			// Install cross-compiled binaries to subdirectories of bin.
 			elem = full
 		}
-		if p.build.BinDir != gobin && goTools[p.ImportPath] == toBin {
-			// Override BinDir.
-			// This is from a subrepo but installs to $GOROOT/bin
-			// by default anyway (like godoc).
-			p.target = filepath.Join(gorootBin, elem)
-		} else if p.build.BinDir != "" {
+		if p.build.BinDir != "" {
 			// Install to GOBIN or bin of GOPATH entry.
 			p.target = filepath.Join(p.build.BinDir, elem)
 			if !p.Goroot && strings.Contains(elem, "/") && gobin != "" {

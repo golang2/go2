@@ -22,6 +22,16 @@ type itabEntry struct {
 var signatlist []*Node
 var itabs []itabEntry
 
+type Sig struct {
+	name   string
+	pkg    *Pkg
+	isym   *Sym
+	tsym   *Sym
+	type_  *Type
+	mtype  *Type
+	offset int32
+}
+
 // byMethodNameAndPackagePath sorts method signatures by name, then package path.
 type byMethodNameAndPackagePath []*Sig
 
@@ -65,7 +75,7 @@ func uncommonSize(t *Type) int { // Sizeof(runtime.uncommontype{})
 	if t.Sym == nil && len(methods(t)) == 0 {
 		return 0
 	}
-	return 2*Widthptr + 2*Widthint
+	return 2 * Widthptr
 }
 
 func makefield(name string, t *Type) *Field {
@@ -76,8 +86,8 @@ func makefield(name string, t *Type) *Field {
 }
 
 func mapbucket(t *Type) *Type {
-	if t.Bucket != nil {
-		return t.Bucket
+	if t.MapType().Bucket != nil {
+		return t.MapType().Bucket
 	}
 
 	bucket := typ(TSTRUCT)
@@ -147,17 +157,17 @@ func mapbucket(t *Type) *Type {
 		Yyerror("bad math in mapbucket for %v", t)
 	}
 
-	t.Bucket = bucket
+	t.MapType().Bucket = bucket
 
-	bucket.Map = t
+	bucket.StructType().Map = t
 	return bucket
 }
 
 // Builds a type representing a Hmap structure for the given map type.
 // Make sure this stays in sync with ../../../../runtime/hashmap.go!
 func hmap(t *Type) *Type {
-	if t.Hmap != nil {
-		return t.Hmap
+	if t.MapType().Hmap != nil {
+		return t.MapType().Hmap
 	}
 
 	bucket := mapbucket(t)
@@ -176,14 +186,14 @@ func hmap(t *Type) *Type {
 	h.Local = t.Local
 	h.SetFields(field[:])
 	dowidth(h)
-	t.Hmap = h
-	h.Map = t
+	t.MapType().Hmap = h
+	h.StructType().Map = t
 	return h
 }
 
 func hiter(t *Type) *Type {
-	if t.Hiter != nil {
-		return t.Hiter
+	if t.MapType().Hiter != nil {
+		return t.MapType().Hiter
 	}
 
 	// build a struct:
@@ -224,8 +234,8 @@ func hiter(t *Type) *Type {
 	if i.Width != int64(12*Widthptr) {
 		Yyerror("hash_iter size not correct %d %d", i.Width, 12*Widthptr)
 	}
-	t.Hiter = i
-	i.Map = t
+	t.MapType().Hiter = i
+	i.StructType().Map = t
 	return i
 }
 
@@ -402,8 +412,6 @@ func imethods(t *Type) []*Sig {
 	return methods
 }
 
-var dimportpath_gopkg *Pkg
-
 func dimportpath(p *Pkg) {
 	if p.Pathsym != nil {
 		return
@@ -416,27 +424,18 @@ func dimportpath(p *Pkg) {
 		return
 	}
 
-	if dimportpath_gopkg == nil {
-		dimportpath_gopkg = mkpkg("go")
-		dimportpath_gopkg.Name = "go"
-	}
-
-	nam := "importpath." + p.Prefix + "."
-
-	n := Nod(ONAME, nil, nil)
-	n.Sym = Pkglookup(nam, dimportpath_gopkg)
-
-	n.Class = PEXTERN
-	n.Xoffset = 0
-	p.Pathsym = n.Sym
-
+	var str string
 	if p == localpkg {
 		// Note: myimportpath != "", or else dgopkgpath won't call dimportpath.
-		gdatastring(n, myimportpath)
+		str = myimportpath
 	} else {
-		gdatastring(n, p.Path)
+		str = p.Path
 	}
-	ggloblsym(n.Sym, int32(Types[TSTRING].Width), obj.DUPOK|obj.RODATA)
+
+	s := obj.Linklookup(Ctxt, "type..importpath."+p.Prefix+".", 0)
+	ot := dnameData(s, 0, str, "", nil, false)
+	ggloblLSym(s, int32(ot), obj.DUPOK|obj.RODATA)
+	p.Pathsym = s
 }
 
 func dgopkgpath(s *Sym, ot int, pkg *Pkg) int {
@@ -451,15 +450,31 @@ func dgopkgpathLSym(s *obj.LSym, ot int, pkg *Pkg) int {
 	if pkg == localpkg && myimportpath == "" {
 		// If we don't know the full import path of the package being compiled
 		// (i.e. -p was not passed on the compiler command line), emit a reference to
-		// go.importpath.""., which the linker will rewrite using the correct import path.
+		// type..importpath.""., which the linker will rewrite using the correct import path.
 		// Every package that imports this one directly defines the symbol.
 		// See also https://groups.google.com/forum/#!topic/golang-dev/myb9s53HxGQ.
-		ns := obj.Linklookup(Ctxt, `go.importpath."".`, 0)
+		ns := obj.Linklookup(Ctxt, `type..importpath."".`, 0)
 		return dsymptrLSym(s, ot, ns, 0)
 	}
 
 	dimportpath(pkg)
-	return dsymptrLSym(s, ot, Linksym(pkg.Pathsym), 0)
+	return dsymptrLSym(s, ot, pkg.Pathsym, 0)
+}
+
+// dgopkgpathOffLSym writes an offset relocation in s at offset ot to the pkg path symbol.
+func dgopkgpathOffLSym(s *obj.LSym, ot int, pkg *Pkg) int {
+	if pkg == localpkg && myimportpath == "" {
+		// If we don't know the full import path of the package being compiled
+		// (i.e. -p was not passed on the compiler command line), emit a reference to
+		// type..importpath.""., which the linker will rewrite using the correct import path.
+		// Every package that imports this one directly defines the symbol.
+		// See also https://groups.google.com/forum/#!topic/golang-dev/myb9s53HxGQ.
+		ns := obj.Linklookup(Ctxt, `type..importpath."".`, 0)
+		return dsymptrOffLSym(s, ot, ns, 0)
+	}
+
+	dimportpath(pkg)
+	return dsymptrOffLSym(s, ot, pkg.Pathsym, 0)
 }
 
 // isExportedField reports whether a struct field is exported.
@@ -485,13 +500,12 @@ func dnameField(s *Sym, ot int, ft *Field) int {
 	if ft.Note != nil {
 		tag = *ft.Note
 	}
-	return dname(s, ot, name, tag, nil, isExportedField(ft))
+	nsym := dname(name, tag, nil, isExportedField(ft))
+	return dsymptrLSym(Linksym(s), ot, nsym, 0)
 }
 
-var dnameCount int
-
-// dname dumps a reflect.name for a struct field or method.
-func dname(s *Sym, ot int, name, tag string, pkg *Pkg, exported bool) int {
+// dnameData writes the contents of a reflect.name into s at offset ot.
+func dnameData(s *obj.LSym, ot int, name, tag string, pkg *Pkg, exported bool) int {
 	if len(name) > 1<<16-1 {
 		Fatalf("name too long: %s", name)
 	}
@@ -524,31 +538,46 @@ func dname(s *Sym, ot int, name, tag string, pkg *Pkg, exported bool) int {
 		copy(tb[2:], tag)
 	}
 
-	// Very few names require a pkgPath *string (only those
-	// defined in a different package than their type). So if
-	// there is no pkgPath, we treat the name contents as string
-	// data that duplicates across packages.
-	var bsym *obj.LSym
-	if pkg == nil {
-		_, bsym = stringsym(string(b))
-	} else {
-		// Write out data as "type.." to signal two things to the
-		// linker, first that when dynamically linking, the symbol
-		// should be moved to a relro section, and second that the
-		// contents should not be decoded as a type.
-		bsymname := fmt.Sprintf(`type..methodname."".%d`, dnameCount)
-		dnameCount++
-		bsym = obj.Linklookup(Ctxt, bsymname, 0)
-		bsym.P = b
-		boff := len(b)
-		boff = int(Rnd(int64(boff), int64(Widthptr)))
-		boff = dgopkgpathLSym(bsym, boff, pkg)
-		ggloblLSym(bsym, int32(boff), obj.RODATA|obj.LOCAL)
+	ot = int(s.WriteBytes(Ctxt, int64(ot), b))
+
+	if pkg != nil {
+		ot = dgopkgpathOffLSym(s, ot, pkg)
 	}
 
-	ot = dsymptrLSym(Linksym(s), ot, bsym, 0)
-
 	return ot
+}
+
+var dnameCount int
+
+// dname creates a reflect.name for a struct field or method.
+func dname(name, tag string, pkg *Pkg, exported bool) *obj.LSym {
+	// Write out data as "type.." to signal two things to the
+	// linker, first that when dynamically linking, the symbol
+	// should be moved to a relro section, and second that the
+	// contents should not be decoded as a type.
+	sname := "type..namedata."
+	if pkg == nil {
+		// In the common case, share data with other packages.
+		if name == "" {
+			if exported {
+				sname += "-noname-exported." + tag
+			} else {
+				sname += "-noname-unexported." + tag
+			}
+		} else {
+			sname += name + "." + tag
+		}
+	} else {
+		sname = fmt.Sprintf(`%s"".%d`, sname, dnameCount)
+		dnameCount++
+	}
+	s := obj.Linklookup(Ctxt, sname, 0)
+	if len(s.P) > 0 {
+		return s
+	}
+	ot := dnameData(s, 0, name, tag, pkg, exported)
+	ggloblLSym(s, int32(ot), obj.DUPOK|obj.RODATA)
+	return s
 }
 
 // dextratype dumps the fields of a runtime.uncommontype.
@@ -570,13 +599,23 @@ func dextratype(s *Sym, ot int, t *Type, dataAdd int) int {
 
 	ot = dgopkgpath(s, ot, typePkg(t))
 
-	// slice header
-	ot = dsymptr(s, ot, s, ot+Widthptr+2*Widthint+dataAdd)
+	dataAdd += Widthptr + 2 + 2
+	if Widthptr == 8 {
+		dataAdd += 4
+	}
+	mcount := len(m)
+	if mcount != int(uint16(mcount)) {
+		Fatalf("too many methods on %s: %d", t, mcount)
+	}
+	if dataAdd != int(uint16(dataAdd)) {
+		Fatalf("methods are too far away on %s: %d", t, dataAdd)
+	}
 
-	n := len(m)
-	ot = duintxx(s, ot, uint64(n), Widthint)
-	ot = duintxx(s, ot, uint64(n), Widthint)
-
+	ot = duint16(s, ot, uint16(mcount))
+	ot = duint16(s, ot, uint16(dataAdd))
+	if Widthptr == 8 {
+		ot = duint32(s, ot, 0) // align for following pointers
+	}
 	return ot
 }
 
@@ -599,6 +638,7 @@ func typePkg(t *Type) *Pkg {
 // dextratypeData dumps the backing array for the []method field of
 // runtime.uncommontype.
 func dextratypeData(s *Sym, ot int, t *Type) int {
+	lsym := Linksym(s)
 	for _, a := range methods(t) {
 		// ../../../../runtime/type.go:/method
 		exported := exportname(a.name)
@@ -606,22 +646,26 @@ func dextratypeData(s *Sym, ot int, t *Type) int {
 		if !exported && a.pkg != typePkg(t) {
 			pkg = a.pkg
 		}
-		ot = dname(s, ot, a.name, "", pkg, exported)
-		ot = dmethodptr(s, ot, dtypesym(a.mtype))
-		ot = dmethodptr(s, ot, a.isym)
-		ot = dmethodptr(s, ot, a.tsym)
+		nsym := dname(a.name, "", pkg, exported)
+		ot = dsymptrLSym(lsym, ot, nsym, 0)
+		ot = dmethodptrOffLSym(lsym, ot, Linksym(dtypesym(a.mtype)))
+		ot = dmethodptrOffLSym(lsym, ot, Linksym(a.isym))
+		ot = dmethodptrOffLSym(lsym, ot, Linksym(a.tsym))
+		if Widthptr == 8 {
+			ot = duintxxLSym(lsym, ot, 0, 4) // pad to reflect.method size
+		}
 	}
 	return ot
 }
 
-func dmethodptr(s *Sym, off int, x *Sym) int {
-	duintptr(s, off, 0)
-	r := obj.Addrel(Linksym(s))
-	r.Off = int32(off)
-	r.Siz = uint8(Widthptr)
-	r.Sym = Linksym(x)
-	r.Type = obj.R_METHOD
-	return off + Widthptr
+func dmethodptrOffLSym(s *obj.LSym, ot int, x *obj.LSym) int {
+	duintxxLSym(s, ot, 0, 4)
+	r := obj.Addrel(s)
+	r.Off = int32(ot)
+	r.Siz = 4
+	r.Sym = x
+	r.Type = obj.R_METHODOFF
+	return ot + 4
 }
 
 var kinds = []int{
@@ -654,67 +698,47 @@ var kinds = []int{
 }
 
 func haspointers(t *Type) bool {
-	if t.Haspointers != 0 {
-		return t.Haspointers-1 != 0
-	}
-
-	var ret bool
 	switch t.Etype {
-	case TINT,
-		TUINT,
-		TINT8,
-		TUINT8,
-		TINT16,
-		TUINT16,
-		TINT32,
-		TUINT32,
-		TINT64,
-		TUINT64,
-		TUINTPTR,
-		TFLOAT32,
-		TFLOAT64,
-		TCOMPLEX64,
-		TCOMPLEX128,
-		TBOOL:
-		ret = false
+	case TINT, TUINT, TINT8, TUINT8, TINT16, TUINT16, TINT32, TUINT32, TINT64,
+		TUINT64, TUINTPTR, TFLOAT32, TFLOAT64, TCOMPLEX64, TCOMPLEX128, TBOOL:
+		return false
 
 	case TARRAY:
 		if t.IsSlice() {
-			ret = true
-			break
+			return true
 		}
 
-		if t.NumElem() == 0 { // empty array
-			ret = false
-			break
+		at := t.Extra.(*ArrayType)
+		if at.Haspointers != 0 {
+			return at.Haspointers-1 != 0
 		}
 
-		ret = haspointers(t.Elem())
+		ret := false
+		if t.NumElem() != 0 { // non-empty array
+			ret = haspointers(t.Elem())
+		}
+
+		at.Haspointers = 1 + uint8(obj.Bool2int(ret))
+		return ret
 
 	case TSTRUCT:
-		ret = false
+		st := t.StructType()
+		if st.Haspointers != 0 {
+			return st.Haspointers-1 != 0
+		}
+
+		ret := false
 		for _, t1 := range t.Fields().Slice() {
 			if haspointers(t1.Type) {
 				ret = true
 				break
 			}
 		}
-
-	case TSTRING,
-		TPTR32,
-		TPTR64,
-		TUNSAFEPTR,
-		TINTER,
-		TCHAN,
-		TMAP,
-		TFUNC:
-		fallthrough
-	default:
-		ret = true
+		st.Haspointers = 1 + uint8(obj.Bool2int(ret))
+		return ret
 	}
 
-	t.Haspointers = 1 + uint8(obj.Bool2int(ret))
-	return ret
+	return true
 }
 
 // typeptrdata returns the length in bytes of the prefix of t
@@ -889,7 +913,7 @@ func tracksym(t *Type, f *Field) *Sym {
 	return Pkglookup(Tconv(t, FmtLeft)+"."+f.Sym.Name, trackpkg)
 }
 
-func typelinksym(t *Type) *Sym {
+func typelinkLSym(t *Type) *obj.LSym {
 	// %-uT is what the generated Type's string field says.
 	// It uses (ambiguous) package names instead of import paths.
 	// %-T is the complete, unambiguous type name.
@@ -899,13 +923,8 @@ func typelinksym(t *Type) *Sym {
 	// ensure the types appear sorted by their string field. The
 	// names are a little long but they are discarded by the linker
 	// and do not end up in the symbol table of the final binary.
-	p := Tconv(t, FmtLeft|FmtUnsigned) + "\t" + Tconv(t, FmtLeft)
-
-	s := Pkglookup(p, typelinkpkg)
-
-	//print("typelinksym: %s -> %+S\n", p, s);
-
-	return s
+	name := "go.typelink." + Tconv(t, FmtLeft|FmtUnsigned) + "\t" + Tconv(t, FmtLeft)
+	return obj.Linklookup(Ctxt, name, 0)
 }
 
 func typesymprefix(prefix string, t *Type) *Sym {
@@ -1214,7 +1233,8 @@ ok:
 			if !exported && a.pkg != tpkg {
 				pkg = a.pkg
 			}
-			ot = dname(s, ot, a.name, "", pkg, exported)
+			nsym := dname(a.name, "", pkg, exported)
+			ot = dsymptrLSym(Linksym(s), ot, nsym, 0)
 			ot = dsymptr(s, ot, dtypesym(a.type_), 0)
 		}
 
@@ -1301,17 +1321,28 @@ ok:
 	ggloblsym(s, int32(ot), int16(dupok|obj.RODATA))
 
 	// generate typelink.foo pointing at s = type.foo.
+	//
 	// The linker will leave a table of all the typelinks for
-	// types in the binary, so reflect can find them.
-	// We only need the link for unnamed composites that
-	// we want be able to find.
-	if t.Sym == nil {
+	// types in the binary, so the runtime can find them.
+	//
+	// When buildmode=shared, all types are in typelinks so the
+	// runtime can deduplicate type pointers.
+	keep := Ctxt.Flag_dynlink
+	if !keep && t.Sym == nil {
+		// For an unnamed type, we only need the link if the type can
+		// be created at run time by reflect.PtrTo and similar
+		// functions. If the type exists in the program, those
+		// functions must return the existing type structure rather
+		// than creating a new one.
 		switch t.Etype {
 		case TPTR32, TPTR64, TARRAY, TCHAN, TFUNC, TMAP, TSTRUCT:
-			slink := typelinksym(t)
-			dsymptr(slink, 0, s, 0)
-			ggloblsym(slink, int32(Widthptr), int16(dupok|obj.RODATA))
+			keep = true
 		}
+	}
+	if keep {
+		slink := typelinkLSym(t)
+		dsymptrOffLSym(slink, 0, Linksym(s), 0)
+		ggloblLSym(slink, 4, int16(dupok|obj.RODATA))
 	}
 
 	return s
@@ -1393,10 +1424,10 @@ func dumptypestructs() {
 		// add paths for runtime and main, which 6l imports implicitly.
 		dimportpath(Runtimepkg)
 
-		if flag_race != 0 {
+		if flag_race {
 			dimportpath(racepkg)
 		}
-		if flag_msan != 0 {
+		if flag_msan {
 			dimportpath(msanpkg)
 		}
 		dimportpath(mkpkg("main"))

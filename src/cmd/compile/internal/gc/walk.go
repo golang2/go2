@@ -6,6 +6,7 @@ package gc
 
 import (
 	"cmd/internal/obj"
+	"cmd/internal/sys"
 	"fmt"
 	"strings"
 )
@@ -287,7 +288,7 @@ func walkstmt(n *Node) *Node {
 		if n.List.Len() == 0 {
 			break
 		}
-		if (Curfn.Type.Outnamed && n.List.Len() > 1) || paramoutheap(Curfn) {
+		if (Curfn.Type.FuncType().Outnamed && n.List.Len() > 1) || paramoutheap(Curfn) {
 			// assign to the function out parameters,
 			// so that reorder3 can fix up conflicts
 			var rl []*Node
@@ -593,8 +594,7 @@ opswitch:
 		// for a struct containing a reflect.Value, which itself has
 		// an unexported field of type unsafe.Pointer.
 		old_safemode := safemode
-
-		safemode = 0
+		safemode = false
 		n = walkcompare(n, init)
 		safemode = old_safemode
 
@@ -672,8 +672,7 @@ opswitch:
 		walkexprlist(n.List.Slice(), init)
 
 		if n.Left.Op == ONAME && n.Left.Sym.Name == "Sqrt" && n.Left.Sym.Pkg.Path == "math" {
-			switch Thearch.Thechar {
-			case '5', '6', '7', '9':
+			if Thearch.LinkArch.InFamily(sys.AMD64, sys.ARM, sys.ARM64, sys.PPC64, sys.S390X) {
 				n.Op = OSQRT
 				n.Left = n.List.First()
 				n.List.Set(nil)
@@ -1056,7 +1055,7 @@ opswitch:
 		n = walkexpr(n, init)
 
 	case OCONV, OCONVNOP:
-		if Thearch.Thechar == '5' {
+		if Thearch.LinkArch.Family == sys.ARM {
 			if n.Left.Type.IsFloat() {
 				if n.Type.Etype == TINT64 {
 					n = mkcall("float64toint64", n.Type, init, conv(n.Left, Types[TFLOAT64]))
@@ -1783,7 +1782,7 @@ func ascompatte(op Op, call *Node, isddd bool, nl *Type, lr []*Node, fp int, ini
 	var nn []*Node
 
 	// f(g()) where g has multiple return values
-	if r != nil && len(lr) <= 1 && r.Type.IsStruct() && r.Type.Funarg {
+	if r != nil && len(lr) <= 1 && r.Type.IsFuncArgStruct() {
 		// optimization - can do block copy
 		if eqtypenoname(r.Type, nl) {
 			arg := nodarg(nl, fp)
@@ -1938,7 +1937,7 @@ func walkprint(nn *Node, init *Nodes) *Node {
 			on = substArgTypes(on, n.Type) // any-1
 		} else if Isint[et] {
 			if et == TUINT64 {
-				if (t.Sym.Pkg == Runtimepkg || compiling_runtime != 0) && t.Sym.Name == "hex" {
+				if (t.Sym.Pkg == Runtimepkg || compiling_runtime) && t.Sym.Name == "hex" {
 					on = syslook("printhex")
 				} else {
 					on = syslook("printuint")
@@ -2041,7 +2040,7 @@ func isglobal(n *Node) bool {
 
 // Do we need a write barrier for the assignment l = r?
 func needwritebarrier(l *Node, r *Node) bool {
-	if use_writebarrier == 0 {
+	if !use_writebarrier {
 		return false
 	}
 
@@ -2550,7 +2549,7 @@ func paramstoheap(params *Type, out bool) []*Node {
 		}
 
 		// generate allocation & copying code
-		if compiling_runtime != 0 {
+		if compiling_runtime {
 			Yyerror("%v escapes to heap, not allowed in runtime.", v)
 		}
 		if prealloc[v] == nil {
@@ -3274,7 +3273,7 @@ func samecheap(a *Node, b *Node) bool {
 // The result of walkrotate MUST be assigned back to n, e.g.
 // 	n.Left = walkrotate(n.Left)
 func walkrotate(n *Node) *Node {
-	if Thearch.Thechar == '0' || Thearch.Thechar == '7' || Thearch.Thechar == '9' {
+	if Thearch.LinkArch.InFamily(sys.MIPS64, sys.ARM64, sys.PPC64) {
 		return n
 	}
 
@@ -3293,6 +3292,11 @@ func walkrotate(n *Node) *Node {
 
 	// Constants adding to width?
 	w := int(l.Type.Width * 8)
+
+	if Thearch.LinkArch.Family == sys.S390X && w != 32 && w != 64 {
+		// only supports 32-bit and 64-bit rotates
+		return n
+	}
 
 	if Smallintconst(l.Right) && Smallintconst(r.Right) {
 		sl := int(l.Right.Int64())
@@ -3401,7 +3405,7 @@ func walkdiv(n *Node, init *Nodes) *Node {
 	// if >= 0, nr is 1<<pow // 1 if nr is negative.
 
 	// TODO(minux)
-	if Thearch.Thechar == '0' || Thearch.Thechar == '7' || Thearch.Thechar == '9' {
+	if Thearch.LinkArch.InFamily(sys.MIPS64, sys.ARM64, sys.PPC64) {
 		return n
 	}
 

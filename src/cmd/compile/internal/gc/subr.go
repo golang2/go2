@@ -372,30 +372,6 @@ func saveorignode(n *Node) {
 	n.Orig = norig
 }
 
-// checkMapKeyType checks that Type key is valid for use as a map key.
-func checkMapKeyType(key *Type) {
-	alg, bad := algtype1(key)
-	if alg != ANOEQ {
-		return
-	}
-	switch bad.Etype {
-	default:
-		Yyerror("invalid map key type %v", key)
-	case TANY:
-		// Will be resolved later.
-	case TFORW:
-		// map[key] used during definition of key.
-		// postpone check until key is fully defined.
-		// if there are multiple uses of map[key]
-		// before key is fully defined, the error
-		// will only be printed for the first one.
-		// good enough.
-		if key.Maplineno == 0 {
-			key.Maplineno = lineno
-		}
-	}
-}
-
 // methcmp sorts by symbol, then by package path for unexported symbols.
 type methcmp []*Field
 
@@ -540,8 +516,15 @@ func treecopy(n *Node, lineno int32) *Node {
 		}
 		return n
 
+	case OPACK:
+		// OPACK nodes are never valid in const value declarations,
+		// but allow them like any other declared symbol to avoid
+		// crashing (golang.org/issue/11361).
+		fallthrough
+
 	case ONAME, OLITERAL, OTYPE:
 		return n
+
 	}
 }
 
@@ -767,7 +750,7 @@ func assignop(src *Type, dst *Type, why *string) Op {
 
 	// TODO(rsc,lvd): This behaves poorly in the presence of inlining.
 	// https://golang.org/issue/2795
-	if safemode != 0 && importpkg == nil && src != nil && src.Etype == TUNSAFEPTR {
+	if safemode && importpkg == nil && src != nil && src.Etype == TUNSAFEPTR {
 		Yyerror("cannot use unsafe.Pointer")
 		errorexit()
 	}
@@ -1079,6 +1062,10 @@ func syslook(name string) *Node {
 		Fatalf("syslook: can't find runtime.%s", name)
 	}
 	return s.Def
+}
+
+func (s *Sym) IsRuntimeCall(name string) bool {
+	return s.Pkg == Runtimepkg && s.Name == name
 }
 
 // typehash computes a hash value for type t to use in type switch

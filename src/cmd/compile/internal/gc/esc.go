@@ -1435,7 +1435,7 @@ func esccall(e *EscState, n *Node, up *Node) {
 	ll := n.List
 	if n.List.Len() == 1 {
 		a := n.List.First()
-		if a.Type.IsStruct() && a.Type.Funarg { // f(g()).
+		if a.Type.IsFuncArgStruct() { // f(g())
 			ll = e.nodeEscState(a).Escretval
 		}
 	}
@@ -1457,6 +1457,11 @@ func esccall(e *EscState, n *Node, up *Node) {
 			src := n.Left.Left
 			if haspointers(t.Type) {
 				escassignSinkNilWhy(e, n, src, "receiver in indirect call")
+			}
+		} else { // indirect and OCALLFUNC = could be captured variables, too. (#14409)
+			ll := e.nodeEscState(n).Escretval.Slice()
+			for _, llN := range ll {
+				escassignDereference(e, llN, fn, e.stepAssign(nil, llN, fn, "captured by called closure"))
 			}
 		}
 		return

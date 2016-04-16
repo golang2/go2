@@ -587,6 +587,11 @@
 (CMPB x (MOVBconst [c])) -> (CMPBconst x [c])
 (CMPB (MOVBconst [c]) x) -> (InvertFlags (CMPBconst x [c]))
 
+// Using MOVBQZX instead of ANDQ is cheaper.
+(ANDQconst [0xFF] x) -> (MOVBQZX x)
+(ANDQconst [0xFFFF] x) -> (MOVWQZX x)
+(ANDQconst [0xFFFFFFFF] x) -> (MOVLQZX x)
+
 // strength reduction
 // Assumes that the following costs from https://gmplib.org/~tege/x86-timing.pdf:
 //    1 - addq, shlq, leaq, negq
@@ -1093,6 +1098,11 @@
 (CMPBconst (MOVBconst [x]) [y]) && int8(x)>int8(y) && uint8(x)>uint8(y) -> (FlagGT_UGT)
 
 // Other known comparisons.
+(CMPQconst (MOVBQZX _) [c]) && 0xFF < c -> (FlagLT_ULT)
+(CMPQconst (MOVWQZX _) [c]) && 0xFFFF < c -> (FlagLT_ULT)
+(CMPQconst (MOVLQZX _) [c]) && 0xFFFFFFFF < c -> (FlagLT_ULT)
+(CMPLconst (SHRLconst _ [c]) [n]) && 0 <= n && 0 < c && c <= 32 && (1<<uint64(32-c)) <= uint64(n) -> (FlagLT_ULT)
+(CMPQconst (SHRQconst _ [c]) [n]) && 0 <= n && 0 < c && c <= 64 && (1<<uint64(64-c)) <= uint64(n) -> (FlagLT_ULT)
 (CMPQconst (ANDQconst _ [m]) [n]) && 0 <= m && m < n -> (FlagLT_ULT)
 (CMPLconst (ANDLconst _ [m]) [n]) && 0 <= int32(m) && int32(m) < int32(n) -> (FlagLT_ULT)
 (CMPWconst (ANDWconst _ [m]) [n]) && 0 <= int16(m) && int16(m) < int16(n) -> (FlagLT_ULT)
@@ -1263,6 +1273,12 @@
 (XORWconst [c] x) && int16(c)==0   -> x
 (XORBconst [c] x) && int8(c)==0    -> x
 
+// Convert constant subtracts to constant adds
+(SUBQconst [c] x) && c != -(1<<31) -> (ADDQconst [-c] x)
+(SUBLconst [c] x) -> (ADDLconst [int64(int32(-c))] x)
+(SUBWconst [c] x) -> (ADDWconst [int64(int16(-c))] x)
+(SUBBconst [c] x) -> (ADDBconst [int64(int8(-c))] x)
+
 // generic constant folding
 // TODO: more of this
 (ADDQconst [c] (MOVQconst [d])) -> (MOVQconst [c+d])
@@ -1353,13 +1369,13 @@
 // There are many ways these combinations could occur.  This is
 // designed to match the way encoding/binary.LittleEndian does it.
 (ORW               x0:(MOVBload [i]   {s} p mem)
-    (SHLWconst [8] x1:(MOVBload [i+1] {s} p mem))) && mergePoint(b,x0,x1) != nil -> @mergePoint(b,x0,x1) (MOVWload [i] {s} p mem)
+    (SHLWconst [8] x1:(MOVBload [i+1] {s} p mem))) && x0.Uses == 1 && x1.Uses == 1 && mergePoint(b,x0,x1) != nil -> @mergePoint(b,x0,x1) (MOVWload [i] {s} p mem)
 
 (ORL (ORL (ORL
                     x0:(MOVBload [i]   {s} p mem)
     (SHLLconst [8]  x1:(MOVBload [i+1] {s} p mem)))
     (SHLLconst [16] x2:(MOVBload [i+2] {s} p mem)))
-    (SHLLconst [24] x3:(MOVBload [i+3] {s} p mem))) && mergePoint(b,x0,x1,x2,x3) != nil -> @mergePoint(b,x0,x1,x2,x3) (MOVLload [i] {s} p mem)
+    (SHLLconst [24] x3:(MOVBload [i+3] {s} p mem))) && x0.Uses == 1 && x1.Uses == 1 && x2.Uses == 1 && x3.Uses == 1 && mergePoint(b,x0,x1,x2,x3) != nil -> @mergePoint(b,x0,x1,x2,x3) (MOVLload [i] {s} p mem)
 
 (ORQ (ORQ (ORQ (ORQ (ORQ (ORQ (ORQ
                     x0:(MOVBload [i]   {s} p mem)
@@ -1369,16 +1385,16 @@
     (SHLQconst [32] x4:(MOVBload [i+4] {s} p mem)))
     (SHLQconst [40] x5:(MOVBload [i+5] {s} p mem)))
     (SHLQconst [48] x6:(MOVBload [i+6] {s} p mem)))
-    (SHLQconst [56] x7:(MOVBload [i+7] {s} p mem))) && mergePoint(b,x0,x1,x2,x3,x4,x5,x6,x7) != nil -> @mergePoint(b,x0,x1,x2,x3,x4,x5,x6,x7) (MOVQload [i] {s} p mem)
+    (SHLQconst [56] x7:(MOVBload [i+7] {s} p mem))) && x0.Uses == 1 && x1.Uses == 1 && x2.Uses == 1 && x3.Uses == 1 && x4.Uses == 1 && x5.Uses == 1 && x6.Uses == 1 && x7.Uses == 1 && mergePoint(b,x0,x1,x2,x3,x4,x5,x6,x7) != nil -> @mergePoint(b,x0,x1,x2,x3,x4,x5,x6,x7) (MOVQload [i] {s} p mem)
 
 (ORW               x0:(MOVBloadidx1 [i]   {s} p idx mem)
-    (SHLWconst [8] x1:(MOVBloadidx1 [i+1] {s} p idx mem))) && mergePoint(b,x0,x1) != nil -> @mergePoint(b,x0,x1) (MOVWloadidx1 <v.Type> [i] {s} p idx mem)
+    (SHLWconst [8] x1:(MOVBloadidx1 [i+1] {s} p idx mem))) && x0.Uses == 1 && x1.Uses == 1 && mergePoint(b,x0,x1) != nil -> @mergePoint(b,x0,x1) (MOVWloadidx1 <v.Type> [i] {s} p idx mem)
 
 (ORL (ORL (ORL
                     x0:(MOVBloadidx1 [i]   {s} p idx mem)
     (SHLLconst [8]  x1:(MOVBloadidx1 [i+1] {s} p idx mem)))
     (SHLLconst [16] x2:(MOVBloadidx1 [i+2] {s} p idx mem)))
-    (SHLLconst [24] x3:(MOVBloadidx1 [i+3] {s} p idx mem))) && mergePoint(b,x0,x1,x2,x3) != nil -> @mergePoint(b,x0,x1,x2,x3) (MOVLloadidx1 <v.Type> [i] {s} p idx mem)
+    (SHLLconst [24] x3:(MOVBloadidx1 [i+3] {s} p idx mem))) && x0.Uses == 1 && x1.Uses == 1 && x2.Uses == 1 && x3.Uses == 1 && mergePoint(b,x0,x1,x2,x3) != nil -> @mergePoint(b,x0,x1,x2,x3) (MOVLloadidx1 <v.Type> [i] {s} p idx mem)
 
 (ORQ (ORQ (ORQ (ORQ (ORQ (ORQ (ORQ
                     x0:(MOVBloadidx1 [i]   {s} p idx mem)
@@ -1388,4 +1404,4 @@
     (SHLQconst [32] x4:(MOVBloadidx1 [i+4] {s} p idx mem)))
     (SHLQconst [40] x5:(MOVBloadidx1 [i+5] {s} p idx mem)))
     (SHLQconst [48] x6:(MOVBloadidx1 [i+6] {s} p idx mem)))
-    (SHLQconst [56] x7:(MOVBloadidx1 [i+7] {s} p idx mem))) && mergePoint(b,x0,x1,x2,x3,x4,x5,x6,x7) != nil -> @mergePoint(b,x0,x1,x2,x3,x4,x5,x6,x7) (MOVQloadidx1 <v.Type> [i] {s} p idx mem)
+    (SHLQconst [56] x7:(MOVBloadidx1 [i+7] {s} p idx mem))) && x0.Uses == 1 && x1.Uses == 1 && x2.Uses == 1 && x3.Uses == 1 && x4.Uses == 1 && x5.Uses == 1 && x6.Uses == 1 && x7.Uses == 1 && mergePoint(b,x0,x1,x2,x3,x4,x5,x6,x7) != nil -> @mergePoint(b,x0,x1,x2,x3,x4,x5,x6,x7) (MOVQloadidx1 <v.Type> [i] {s} p idx mem)

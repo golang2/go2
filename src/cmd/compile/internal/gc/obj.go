@@ -5,6 +5,7 @@
 package gc
 
 import (
+	"cmd/internal/bio"
 	"cmd/internal/obj"
 	"crypto/sha256"
 	"fmt"
@@ -23,7 +24,7 @@ func formathdr(arhdr []byte, name string, size int64) {
 
 func dumpobj() {
 	var err error
-	bout, err = obj.Bopenw(outfile)
+	bout, err = bio.Create(outfile)
 	if err != nil {
 		Flusherrors()
 		fmt.Printf("can't create %s: %v\n", outfile, err)
@@ -32,36 +33,36 @@ func dumpobj() {
 
 	startobj := int64(0)
 	var arhdr [ArhdrSize]byte
-	if writearchive != 0 {
-		obj.Bwritestring(bout, "!<arch>\n")
+	if writearchive {
+		bout.WriteString("!<arch>\n")
 		arhdr = [ArhdrSize]byte{}
 		bout.Write(arhdr[:])
-		startobj = obj.Boffset(bout)
+		startobj = bout.Offset()
 	}
 
 	fmt.Fprintf(bout, "go object %s %s %s %s\n", obj.Getgoos(), obj.Getgoarch(), obj.Getgoversion(), obj.Expstring())
 	dumpexport()
 
-	if writearchive != 0 {
+	if writearchive {
 		bout.Flush()
-		size := obj.Boffset(bout) - startobj
+		size := bout.Offset() - startobj
 		if size&1 != 0 {
-			obj.Bputc(bout, 0)
+			bout.WriteByte(0)
 		}
-		obj.Bseek(bout, startobj-ArhdrSize, 0)
+		bout.Seek(startobj-ArhdrSize, 0)
 		formathdr(arhdr[:], "__.PKGDEF", size)
 		bout.Write(arhdr[:])
 		bout.Flush()
 
-		obj.Bseek(bout, startobj+size+(size&1), 0)
+		bout.Seek(startobj+size+(size&1), 0)
 		arhdr = [ArhdrSize]byte{}
 		bout.Write(arhdr[:])
-		startobj = obj.Boffset(bout)
+		startobj = bout.Offset()
 		fmt.Fprintf(bout, "go object %s %s %s %s\n", obj.Getgoos(), obj.Getgoarch(), obj.Getgoversion(), obj.Expstring())
 	}
 
 	if pragcgobuf != "" {
-		if writearchive != 0 {
+		if writearchive {
 			// write empty export section; must be before cgo section
 			fmt.Fprintf(bout, "\n$$\n\n$$\n\n")
 		}
@@ -87,20 +88,20 @@ func dumpobj() {
 	externdcl = tmp
 
 	dumpdata()
-	obj.Writeobjdirect(Ctxt, bout)
+	obj.Writeobjdirect(Ctxt, bout.Writer)
 
-	if writearchive != 0 {
+	if writearchive {
 		bout.Flush()
-		size := obj.Boffset(bout) - startobj
+		size := bout.Offset() - startobj
 		if size&1 != 0 {
-			obj.Bputc(bout, 0)
+			bout.WriteByte(0)
 		}
-		obj.Bseek(bout, startobj-ArhdrSize, 0)
+		bout.Seek(startobj-ArhdrSize, 0)
 		formathdr(arhdr[:], "_go_.o", size)
 		bout.Write(arhdr[:])
 	}
 
-	obj.Bterm(bout)
+	bout.Close()
 }
 
 func dumpglobls() {
@@ -132,9 +133,9 @@ func dumpglobls() {
 	funcsyms = nil
 }
 
-func Bputname(b *obj.Biobuf, s *obj.LSym) {
-	obj.Bwritestring(b, s.Name)
-	obj.Bputc(b, 0)
+func Bputname(b *bio.Writer, s *obj.LSym) {
+	b.WriteString(s.Name)
+	b.WriteByte(0)
 }
 
 func Linksym(s *Sym) *obj.LSym {
@@ -317,6 +318,12 @@ func dsymptrLSym(s *obj.LSym, off int, x *obj.LSym, xoff int) int {
 	off = int(Rnd(int64(off), int64(Widthptr)))
 	s.WriteAddr(Ctxt, int64(off), Widthptr, x, int64(xoff))
 	off += Widthptr
+	return off
+}
+
+func dsymptrOffLSym(s *obj.LSym, off int, x *obj.LSym, xoff int) int {
+	s.WriteOff(Ctxt, int64(off), x, int64(xoff))
+	off += 4
 	return off
 }
 

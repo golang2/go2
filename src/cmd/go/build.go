@@ -1424,6 +1424,9 @@ func (b *builder) build(a *action) (err error) {
 		if err != nil {
 			return err
 		}
+		if _, ok := buildToolchain.(gccgoToolchain); ok {
+			cgoObjects = append(cgoObjects, filepath.Join(a.objdir, "_cgo_flags"))
+		}
 		cgoObjects = append(cgoObjects, outObj...)
 		gofiles = append(gofiles, outGo...)
 	}
@@ -2599,10 +2602,9 @@ func (gccgoToolchain) pack(b *builder, p *Package, objDir, afile string, ofiles 
 func (tools gccgoToolchain) ld(b *builder, root *action, out string, allactions []*action, mainpkg string, ofiles []string) error {
 	// gccgo needs explicit linking with all package dependencies,
 	// and all LDFLAGS from cgo dependencies.
-	apackagesSeen := make(map[*Package]bool)
+	apackagePathsSeen := make(map[string]bool)
 	afiles := []string{}
 	shlibs := []string{}
-	xfiles := []string{}
 	ldflags := b.gccArchArgs()
 	cgoldflags := []string{}
 	usesCgo := false
@@ -2610,12 +2612,73 @@ func (tools gccgoToolchain) ld(b *builder, root *action, out string, allactions 
 	objc := len(root.p.MFiles) > 0
 	fortran := len(root.p.FFiles) > 0
 
+	readCgoFlags := func(flagsFile string) error {
+		flags, err := ioutil.ReadFile(flagsFile)
+		if err != nil {
+			return err
+		}
+		const ldflagsPrefix = "_CGO_LDFLAGS="
+		for _, line := range strings.Split(string(flags), "\n") {
+			if strings.HasPrefix(line, ldflagsPrefix) {
+				newFlags := strings.Fields(line[len(ldflagsPrefix):])
+				for _, flag := range newFlags {
+					// Every _cgo_flags file has -g and -O2 in _CGO_LDFLAGS
+					// but they don't mean anything to the linker so filter
+					// them out.
+					if flag != "-g" && !strings.HasPrefix(flag, "-O") {
+						cgoldflags = append(cgoldflags, flag)
+					}
+				}
+			}
+		}
+		return nil
+	}
+
+	readAndRemoveCgoFlags := func(archive string) (string, error) {
+		newa, err := ioutil.TempFile(b.work, filepath.Base(archive))
+		if err != nil {
+			return "", err
+		}
+		olda, err := os.Open(archive)
+		if err != nil {
+			return "", err
+		}
+		_, err = io.Copy(newa, olda)
+		if err != nil {
+			return "", err
+		}
+		err = olda.Close()
+		if err != nil {
+			return "", err
+		}
+		err = newa.Close()
+		if err != nil {
+			return "", err
+		}
+
+		newarchive := newa.Name()
+		err = b.run(b.work, root.p.ImportPath, nil, "ar", "x", newarchive, "_cgo_flags")
+		if err != nil {
+			return "", err
+		}
+		err = b.run(".", root.p.ImportPath, nil, "ar", "d", newarchive, "_cgo_flags")
+		if err != nil {
+			return "", err
+		}
+		err = readCgoFlags(filepath.Join(b.work, "_cgo_flags"))
+		if err != nil {
+			return "", err
+		}
+		return newarchive, nil
+	}
+
 	actionsSeen := make(map[*action]bool)
 	// Make a pre-order depth-first traversal of the action graph, taking note of
 	// whether a shared library action has been seen on the way to an action (the
 	// construction of the graph means that if any path to a node passes through
 	// a shared library action, they all do).
 	var walk func(a *action, seenShlib bool)
+	var err error
 	walk = func(a *action, seenShlib bool) {
 		if actionsSeen[a] {
 			return
@@ -2630,21 +2693,18 @@ func (tools gccgoToolchain) ld(b *builder, root *action, out string, allactions 
 			// rather than the 'build' location (which may not exist any
 			// more). We still need to traverse the dependencies of the
 			// build action though so saying
-			// if apackagesSeen[a.p] { return }
+			// if apackagePathsSeen[a.p.ImportPath] { return }
 			// doesn't work.
-			if !apackagesSeen[a.p] {
-				apackagesSeen[a.p] = true
-				if a.p.fake && a.p.external {
-					// external _tests, if present must come before
-					// internal _tests. Store these on a separate list
-					// and place them at the head after this loop.
-					xfiles = append(xfiles, a.target)
-				} else if a.p.fake {
-					// move _test files to the top of the link order
-					afiles = append([]string{a.target}, afiles...)
-				} else {
-					afiles = append(afiles, a.target)
+			if !apackagePathsSeen[a.p.ImportPath] {
+				apackagePathsSeen[a.p.ImportPath] = true
+				target := a.target
+				if len(a.p.CgoFiles) > 0 {
+					target, err = readAndRemoveCgoFlags(target)
+					if err != nil {
+						return
+					}
 				}
+				afiles = append(afiles, target)
 			}
 		}
 		if strings.HasSuffix(a.target, ".so") {
@@ -2653,12 +2713,17 @@ func (tools gccgoToolchain) ld(b *builder, root *action, out string, allactions 
 		}
 		for _, a1 := range a.deps {
 			walk(a1, seenShlib)
+			if err != nil {
+				return
+			}
 		}
 	}
 	for _, a1 := range root.deps {
 		walk(a1, false)
+		if err != nil {
+			return err
+		}
 	}
-	afiles = append(xfiles, afiles...)
 
 	for _, a := range allactions {
 		// Gather CgoLDFLAGS, but not from standard packages.
@@ -2685,6 +2750,14 @@ func (tools gccgoToolchain) ld(b *builder, root *action, out string, allactions 
 		}
 		if len(a.p.FFiles) > 0 {
 			fortran = true
+		}
+	}
+
+	for i, o := range ofiles {
+		if filepath.Base(o) == "_cgo_flags" {
+			readCgoFlags(o)
+			ofiles = append(ofiles[:i], ofiles[i+1:]...)
+			break
 		}
 	}
 

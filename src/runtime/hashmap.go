@@ -194,7 +194,7 @@ func makemap(t *maptype, hint int64, h *hmap, bucket unsafe.Pointer) *hmap {
 	}
 
 	if hint < 0 || int64(int32(hint)) != hint {
-		panic("makemap: size out of range")
+		panic(plainError("makemap: size out of range"))
 		// TODO: make hint an int, then none of this nonsense
 	}
 
@@ -428,7 +428,7 @@ func mapaccessK(t *maptype, h *hmap, key unsafe.Pointer) (unsafe.Pointer, unsafe
 
 func mapassign1(t *maptype, h *hmap, key unsafe.Pointer, val unsafe.Pointer) {
 	if h == nil {
-		panic("assignment to entry in nil map")
+		panic(plainError("assignment to entry in nil map"))
 	}
 	if raceenabled {
 		callerpc := getcallerpc(unsafe.Pointer(&t))
@@ -790,7 +790,9 @@ next:
 				}
 			}
 			it.bucket = bucket
-			it.bptr = b
+			if it.bptr != b { // avoid unnecessary write barrier; see issue 14921
+				it.bptr = b
+			}
 			it.i = i + 1
 			it.checkBucket = checkBucket
 			return
@@ -1073,8 +1075,8 @@ func mapzero(t *_type) {
 				throw("map element too large")
 			}
 		}
-		atomic.Storep1(unsafe.Pointer(&zeroptr), persistentalloc(cursize, 64, &memstats.other_sys))
-		atomic.Storep1(unsafe.Pointer(&zerosize), unsafe.Pointer(zerosize))
+		atomic.StorepNoWB(unsafe.Pointer(&zeroptr), persistentalloc(cursize, 64, &memstats.other_sys))
+		atomic.StorepNoWB(unsafe.Pointer(&zerosize), unsafe.Pointer(zerosize))
 	}
 	unlock(&zerolock)
 }

@@ -16,19 +16,27 @@ type slice struct {
 
 // TODO: take uintptrs instead of int64s?
 func makeslice(t *slicetype, len64, cap64 int64) slice {
-	// NOTE: The len > MaxMem/elemsize check here is not strictly necessary,
+	// NOTE: The len > maxElements check here is not strictly necessary,
 	// but it produces a 'len out of range' error instead of a 'cap out of range' error
 	// when someone does make([]T, bignumber). 'cap out of range' is true too,
 	// but since the cap is only being supplied implicitly, saying len is clearer.
 	// See issue 4085.
+
+	maxElements := ^uintptr(0)
+	if t.elem.size > 0 {
+		maxElements = _MaxMem / t.elem.size
+	}
+
 	len := int(len64)
-	if len64 < 0 || int64(len) != len64 || t.elem.size > 0 && uintptr(len) > _MaxMem/t.elem.size {
+	if len64 < 0 || int64(len) != len64 || uintptr(len) > maxElements {
 		panic(errorString("makeslice: len out of range"))
 	}
+
 	cap := int(cap64)
-	if cap < len || int64(cap) != cap64 || t.elem.size > 0 && uintptr(cap) > _MaxMem/t.elem.size {
+	if cap < len || int64(cap) != cap64 || uintptr(cap) > maxElements {
 		panic(errorString("makeslice: cap out of range"))
 	}
+
 	p := newarray(t.elem, uintptr(cap))
 	return slice{p, len, cap}
 }
@@ -37,6 +45,12 @@ func makeslice(t *slicetype, len64, cap64 int64) slice {
 // It is passed the slice type, the old slice, and the desired new minimum capacity,
 // and it returns a new slice with at least that capacity, with the old data
 // copied into it.
+// The new slice's length is set to the old slice's length,
+// NOT to the new requested capacity.
+// This is for codegen convenience. The old slice's length is used immediately
+// to calculate where to write new values during an append.
+// TODO: When the old backend is gone, reconsider this decision.
+// The SSA backend might prefer the new length or to return only ptr/cap and save stack space.
 func growslice(t *slicetype, old slice, cap int) slice {
 	if raceenabled {
 		callerpc := getcallerpc(unsafe.Pointer(&t))

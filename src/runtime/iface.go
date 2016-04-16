@@ -93,26 +93,28 @@ func additab(m *itab, locked, canfail bool) {
 	// so can iterate over both in lock step;
 	// the loop is O(ni+nt) not O(ni*nt).
 	ni := len(inter.mhdr)
-	nt := len(x.mhdr)
+	nt := int(x.mcount)
+	xmhdr := (*[1 << 16]method)(add(unsafe.Pointer(x), uintptr(x.moff)))[:nt:nt]
 	j := 0
 	for k := 0; k < ni; k++ {
 		i := &inter.mhdr[k]
 		iname := i.name.name()
 		itype := i._type
 		ipkg := i.name.pkgPath()
-		if ipkg == nil {
-			ipkg = inter.pkgpath
+		if ipkg == "" {
+			ipkg = inter.pkgpath.name()
 		}
 		for ; j < nt; j++ {
-			t := &x.mhdr[j]
-			if t.mtyp == itype && t.name.name() == iname {
+			t := &xmhdr[j]
+			if typ.typeOff(t.mtyp) == itype && t.name.name() == iname {
 				pkgPath := t.name.pkgPath()
-				if pkgPath == nil {
-					pkgPath = x.pkgpath
+				if pkgPath == "" {
+					pkgPath = x.pkgpath.name()
 				}
 				if t.name.isExported() || pkgPath == ipkg {
 					if m != nil {
-						*(*unsafe.Pointer)(add(unsafe.Pointer(&m.fun[0]), uintptr(k)*sys.PtrSize)) = t.ifn
+						ifn := typ.textOff(t.ifn)
+						*(*unsafe.Pointer)(add(unsafe.Pointer(&m.fun[0]), uintptr(k)*sys.PtrSize)) = ifn
 					}
 					goto nextimethod
 				}
@@ -173,7 +175,7 @@ func convT2E(t *_type, elem unsafe.Pointer, x unsafe.Pointer) (e eface) {
 func convT2I(tab *itab, elem unsafe.Pointer, x unsafe.Pointer) (i iface) {
 	t := tab._type
 	if raceenabled {
-		raceReadObjectPC(t, elem, getcallerpc(unsafe.Pointer(&t)), funcPC(convT2I))
+		raceReadObjectPC(t, elem, getcallerpc(unsafe.Pointer(&tab)), funcPC(convT2I))
 	}
 	if msanenabled {
 		msanread(elem, t.size)

@@ -31,7 +31,9 @@
 package ld
 
 import (
+	"bufio"
 	"cmd/internal/obj"
+	"cmd/internal/sys"
 	"flag"
 	"fmt"
 	"os"
@@ -44,13 +46,12 @@ var (
 )
 
 func Ldmain() {
-	Ctxt = linknew(Thelinkarch)
-	Ctxt.Thechar = int32(Thearch.Thechar)
-	Ctxt.Thestring = Thestring
-	Ctxt.Diag = Diag
-	Ctxt.Bso = &Bso
+	Bso = bufio.NewWriter(os.Stdout)
 
-	Bso = *obj.Binitw(os.Stdout)
+	Ctxt = linknew(SysArch)
+	Ctxt.Diag = Diag
+	Ctxt.Bso = Bso
+
 	Debug = [128]int{}
 	nerrors = 0
 	outfile = ""
@@ -70,7 +71,7 @@ func Ldmain() {
 		}
 	}
 
-	if Thearch.Thechar == '6' && obj.Getgoos() == "plan9" {
+	if SysArch.Family == sys.AMD64 && obj.Getgoos() == "plan9" {
 		obj.Flagcount("8", "use 64-bit addresses in symbol table", &Debug['8'])
 	}
 	obj.Flagfn1("B", "add an ELF NT_GNU_BUILD_ID `note` when using ELF", addbuildinfo)
@@ -107,7 +108,7 @@ func Ldmain() {
 	obj.Flagcount("race", "enable race detector", &flag_race)
 	obj.Flagcount("s", "disable symbol table", &Debug['s'])
 	var flagShared int
-	if Thearch.Thechar == '5' || Thearch.Thechar == '6' {
+	if SysArch.InFamily(sys.ARM, sys.AMD64) {
 		obj.Flagcount("shared", "generate shared object (implies -linkmode external)", &flagShared)
 	}
 	obj.Flagstr("tmpdir", "use `directory` for temporary files", &tmpdir)
@@ -122,7 +123,7 @@ func Ldmain() {
 	obj.Flagparse(usage)
 
 	startProfile()
-	Ctxt.Bso = &Bso
+	Ctxt.Bso = Bso
 	Ctxt.Debugvlog = int32(Debug['v'])
 	if flagShared != 0 {
 		if Buildmode == BuildmodeUnset {
@@ -163,7 +164,7 @@ func Ldmain() {
 	}
 
 	if Debug['v'] != 0 {
-		fmt.Fprintf(&Bso, "HEADER = -H%d -T0x%x -D0x%x -R0x%x\n", HEADTYPE, uint64(INITTEXT), uint64(INITDAT), uint32(INITRND))
+		fmt.Fprintf(Bso, "HEADER = -H%d -T0x%x -D0x%x -R0x%x\n", HEADTYPE, uint64(INITTEXT), uint64(INITDAT), uint32(INITRND))
 	}
 	Bso.Flush()
 
@@ -214,9 +215,9 @@ func Ldmain() {
 	hostlink()
 	archive()
 	if Debug['v'] != 0 {
-		fmt.Fprintf(&Bso, "%5.2f cpu time\n", obj.Cputime())
-		fmt.Fprintf(&Bso, "%d symbols\n", len(Ctxt.Allsym))
-		fmt.Fprintf(&Bso, "%d liveness data\n", liveness)
+		fmt.Fprintf(Bso, "%5.2f cpu time\n", obj.Cputime())
+		fmt.Fprintf(Bso, "%d symbols\n", len(Ctxt.Allsym))
+		fmt.Fprintf(Bso, "%d liveness data\n", liveness)
 	}
 
 	Bso.Flush()

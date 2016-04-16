@@ -884,11 +884,6 @@ var yvex_vpbroadcast = []ytab{
 	{Yxm, Ynone, Yyr, Zvex_rm_v_r, 2},
 }
 
-var yvex_xxmyxm = []ytab{
-	{Yxr, Ynone, Yxm, Zvex_r_v_rm, 2},
-	{Yyr, Ynone, Yxm, Zvex_r_v_rm, 2},
-}
-
 var ymmxmm0f38 = []ytab{
 	{Ymm, Ynone, Ymr, Zlitm_r, 3},
 	{Yxm, Ynone, Yxr, Zlitm_r, 5},
@@ -1754,7 +1749,7 @@ func naclpad(ctxt *obj.Link, s *obj.LSym, c int32, pad int32) int32 {
 }
 
 func spadjop(ctxt *obj.Link, p *obj.Prog, l, q obj.As) obj.As {
-	if p.Mode != 64 || ctxt.Arch.Ptrsize == 4 {
+	if p.Mode != 64 || ctxt.Arch.PtrSize == 4 {
 		return l
 	}
 	return q
@@ -2170,7 +2165,7 @@ func prefixof(ctxt *obj.Link, p *obj.Prog, a *obj.Addr) int {
 					return 0x64 // FS
 				}
 
-				if ctxt.Flag_shared != 0 {
+				if ctxt.Flag_shared {
 					log.Fatalf("unknown TLS base register for linux with -shared")
 				} else {
 					return 0x64 // FS
@@ -2190,7 +2185,7 @@ func prefixof(ctxt *obj.Link, p *obj.Prog, a *obj.Addr) int {
 	}
 
 	if p.Mode == 32 {
-		if a.Index == REG_TLS && ctxt.Flag_shared != 0 {
+		if a.Index == REG_TLS && ctxt.Flag_shared {
 			// When building for inclusion into a shared library, an instruction of the form
 			//     MOVL 0(CX)(TLS*1), AX
 			// becomes
@@ -2219,7 +2214,7 @@ func prefixof(ctxt *obj.Link, p *obj.Prog, a *obj.Addr) int {
 		return 0x26
 
 	case REG_TLS:
-		if ctxt.Flag_shared != 0 {
+		if ctxt.Flag_shared {
 			// When building for inclusion into a shared library, an instruction of the form
 			//     MOV 0(CX)(TLS*1), AX
 			// becomes
@@ -2293,7 +2288,7 @@ func oclass(ctxt *obj.Link, p *obj.Prog, a *obj.Addr) int {
 
 		case obj.NAME_EXTERN,
 			obj.NAME_STATIC:
-			if a.Sym != nil && isextern(a.Sym) || (p.Mode == 32 && ctxt.Flag_shared == 0) {
+			if a.Sym != nil && isextern(a.Sym) || (p.Mode == 32 && !ctxt.Flag_shared) {
 				return Yi32
 			}
 			return Yiauto // use pc-relative addressing
@@ -2712,7 +2707,7 @@ func vaddr(ctxt *obj.Link, p *obj.Prog, a *obj.Addr, r *obj.Reloc) int64 {
 		if a.Name == obj.NAME_GOTREF {
 			r.Siz = 4
 			r.Type = obj.R_GOTPCREL
-		} else if isextern(s) || (p.Mode != 64 && ctxt.Flag_shared == 0) {
+		} else if isextern(s) || (p.Mode != 64 && !ctxt.Flag_shared) {
 			r.Siz = 4
 			r.Type = obj.R_ADDR
 		} else {
@@ -2733,7 +2728,7 @@ func vaddr(ctxt *obj.Link, p *obj.Prog, a *obj.Addr, r *obj.Reloc) int64 {
 			log.Fatalf("reloc")
 		}
 
-		if ctxt.Flag_shared == 0 || isAndroid {
+		if !ctxt.Flag_shared || isAndroid {
 			r.Type = obj.R_TLS_LE
 			r.Siz = 4
 			r.Off = -1 // caller must fill in
@@ -2798,7 +2793,7 @@ func asmandsz(ctxt *obj.Link, p *obj.Prog, a *obj.Addr, r int, rex int, m64 int)
 			if !isextern(a.Sym) && p.Mode == 64 {
 				goto bad
 			}
-			if p.Mode == 32 && ctxt.Flag_shared != 0 {
+			if p.Mode == 32 && ctxt.Flag_shared {
 				base = REG_CX
 			} else {
 				base = REG_NONE
@@ -2843,7 +2838,7 @@ func asmandsz(ctxt *obj.Link, p *obj.Prog, a *obj.Addr, r int, rex int, m64 int)
 		if a.Sym == nil {
 			ctxt.Diag("bad addr: %v", p)
 		}
-		if p.Mode == 32 && ctxt.Flag_shared != 0 {
+		if p.Mode == 32 && ctxt.Flag_shared {
 			base = REG_CX
 		} else {
 			base = REG_NONE
@@ -2897,7 +2892,7 @@ func asmandsz(ctxt *obj.Link, p *obj.Prog, a *obj.Addr, r int, rex int, m64 int)
 	}
 
 	if REG_AX <= base && base <= REG_R15 {
-		if a.Index == REG_TLS && ctxt.Flag_shared == 0 {
+		if a.Index == REG_TLS && !ctxt.Flag_shared {
 			rel = obj.Reloc{}
 			rel.Type = obj.R_TLS_LE
 			rel.Siz = 4
@@ -3313,7 +3308,7 @@ func doasm(ctxt *obj.Link, p *obj.Prog) {
 
 			case Pf2, /* xmm opcode escape */
 				Pf3:
-				ctxt.AsmBuf.Put2(byte(o.prefix), Pm)
+				ctxt.AsmBuf.Put2(o.prefix, Pm)
 
 			case Pef3:
 				ctxt.AsmBuf.Put3(Pe, Pf3, Pm)
@@ -3426,7 +3421,7 @@ func doasm(ctxt *obj.Link, p *obj.Prog) {
 				asmand(ctxt, p, &p.From, &p.To)
 
 			case Zm2_r:
-				ctxt.AsmBuf.Put2(byte(op), byte(o.op[z+1]))
+				ctxt.AsmBuf.Put2(byte(op), o.op[z+1])
 				asmand(ctxt, p, &p.From, &p.To)
 
 			case Zm_r_xm:
@@ -3536,7 +3531,7 @@ func doasm(ctxt *obj.Link, p *obj.Prog) {
 				}
 				ctxt.AsmBuf.Put1(byte(op))
 				if p.As == AXABORT {
-					ctxt.AsmBuf.Put1(byte(o.op[z+1]))
+					ctxt.AsmBuf.Put1(o.op[z+1])
 				}
 				ctxt.AsmBuf.Put1(byte(vaddr(ctxt, p, a, nil)))
 
@@ -3662,7 +3657,7 @@ func doasm(ctxt *obj.Link, p *obj.Prog) {
 				if yt.zcase == Zcallcon {
 					ctxt.AsmBuf.Put1(byte(op))
 				} else {
-					ctxt.AsmBuf.Put1(byte(o.op[z+1]))
+					ctxt.AsmBuf.Put1(o.op[z+1])
 				}
 				r = obj.Addrel(ctxt.Cursym)
 				r.Off = int32(p.Pc + int64(ctxt.AsmBuf.Len()))
@@ -3672,7 +3667,7 @@ func doasm(ctxt *obj.Link, p *obj.Prog) {
 				ctxt.AsmBuf.PutInt32(0)
 
 			case Zcallind:
-				ctxt.AsmBuf.Put2(byte(op), byte(o.op[z+1]))
+				ctxt.AsmBuf.Put2(byte(op), o.op[z+1])
 				r = obj.Addrel(ctxt.Cursym)
 				r.Off = int32(p.Pc + int64(ctxt.AsmBuf.Len()))
 				r.Type = obj.R_ADDR
@@ -3727,7 +3722,7 @@ func doasm(ctxt *obj.Link, p *obj.Prog) {
 						log.Fatalf("bad code")
 					}
 
-					ctxt.AsmBuf.Put1(byte(o.op[z+1]))
+					ctxt.AsmBuf.Put1(o.op[z+1])
 					r = obj.Addrel(ctxt.Cursym)
 					r.Off = int32(p.Pc + int64(ctxt.AsmBuf.Len()))
 					r.Sym = p.To.Sym
@@ -3767,7 +3762,7 @@ func doasm(ctxt *obj.Link, p *obj.Prog) {
 							v--
 						}
 
-						ctxt.AsmBuf.Put1(byte(o.op[z+1]))
+						ctxt.AsmBuf.Put1(o.op[z+1])
 						ctxt.AsmBuf.PutInt32(int32(v))
 					}
 
@@ -3789,7 +3784,7 @@ func doasm(ctxt *obj.Link, p *obj.Prog) {
 					if yt.zcase == Zbr {
 						ctxt.AsmBuf.Put1(0x0f)
 					}
-					ctxt.AsmBuf.Put1(byte(o.op[z+1]))
+					ctxt.AsmBuf.Put1(o.op[z+1])
 					ctxt.AsmBuf.PutInt32(0)
 				}
 
@@ -3950,7 +3945,7 @@ func doasm(ctxt *obj.Link, p *obj.Prog) {
 
 						case obj.Hlinux,
 							obj.Hnacl:
-							if ctxt.Flag_shared != 0 {
+							if ctxt.Flag_shared {
 								// Note that this is not generating the same insns as the other cases.
 								//     MOV TLS, R_to
 								// becomes
@@ -4024,7 +4019,7 @@ func doasm(ctxt *obj.Link, p *obj.Prog) {
 						log.Fatalf("unknown TLS base location for %s", obj.Headstr(ctxt.Headtype))
 
 					case obj.Hlinux:
-						if ctxt.Flag_shared == 0 {
+						if !ctxt.Flag_shared {
 							log.Fatalf("unknown TLS base location for linux without -shared")
 						}
 						// Note that this is not generating the same insn as the other cases.
@@ -4457,9 +4452,8 @@ func asmins(ctxt *obj.Link, p *obj.Prog) {
 	}
 
 	n := ctxt.AsmBuf.Len()
-	var r *obj.Reloc
 	for i := len(ctxt.Cursym.R) - 1; i >= 0; i-- {
-		r = &ctxt.Cursym.R[i:][0]
+		r := &ctxt.Cursym.R[i]
 		if int64(r.Off) < p.Pc {
 			break
 		}

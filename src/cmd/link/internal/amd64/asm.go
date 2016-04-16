@@ -99,12 +99,6 @@ func gentext() {
 	ld.Addaddr(ld.Ctxt, initarray_entry, initfunc)
 }
 
-func adddynrela(rela *ld.LSym, s *ld.LSym, r *ld.Reloc) {
-	ld.Addaddrplus(ld.Ctxt, rela, s, int64(r.Off))
-	ld.Adduint64(ld.Ctxt, rela, ld.R_X86_64_RELATIVE)
-	ld.Addaddrplus(ld.Ctxt, rela, r.Sym, r.Add) // Addend
-}
-
 func adddynrel(s *ld.LSym, r *ld.Reloc) {
 	targ := r.Sym
 	ld.Ctxt.Cursym = s
@@ -285,7 +279,7 @@ func adddynrel(s *ld.LSym, r *ld.Reloc) {
 			return
 		}
 
-		if ld.HEADTYPE == obj.Hdarwin && s.Size == int64(ld.Thearch.Ptrsize) && r.Off == 0 {
+		if ld.HEADTYPE == obj.Hdarwin && s.Size == int64(ld.SysArch.PtrSize) && r.Off == 0 {
 			// Mach-O relocations are a royal pain to lay out.
 			// They use a compact stateful bytecode representation
 			// that is too much bother to deal with.
@@ -611,12 +605,12 @@ func addgotsym(s *ld.LSym) {
 
 func asmb() {
 	if ld.Debug['v'] != 0 {
-		fmt.Fprintf(&ld.Bso, "%5.2f asmb\n", obj.Cputime())
+		fmt.Fprintf(ld.Bso, "%5.2f asmb\n", obj.Cputime())
 	}
 	ld.Bso.Flush()
 
 	if ld.Debug['v'] != 0 {
-		fmt.Fprintf(&ld.Bso, "%5.2f codeblk\n", obj.Cputime())
+		fmt.Fprintf(ld.Bso, "%5.2f codeblk\n", obj.Cputime())
 	}
 	ld.Bso.Flush()
 
@@ -634,7 +628,7 @@ func asmb() {
 
 	if ld.Segrodata.Filelen > 0 {
 		if ld.Debug['v'] != 0 {
-			fmt.Fprintf(&ld.Bso, "%5.2f rodatblk\n", obj.Cputime())
+			fmt.Fprintf(ld.Bso, "%5.2f rodatblk\n", obj.Cputime())
 		}
 		ld.Bso.Flush()
 
@@ -643,26 +637,18 @@ func asmb() {
 	}
 
 	if ld.Debug['v'] != 0 {
-		fmt.Fprintf(&ld.Bso, "%5.2f datblk\n", obj.Cputime())
+		fmt.Fprintf(ld.Bso, "%5.2f datblk\n", obj.Cputime())
 	}
 	ld.Bso.Flush()
 
 	ld.Cseek(int64(ld.Segdata.Fileoff))
 	ld.Datblk(int64(ld.Segdata.Vaddr), int64(ld.Segdata.Filelen))
 
+	ld.Cseek(int64(ld.Segdwarf.Fileoff))
+	ld.Dwarfblk(int64(ld.Segdwarf.Vaddr), int64(ld.Segdwarf.Filelen))
+
 	machlink := int64(0)
 	if ld.HEADTYPE == obj.Hdarwin {
-		if ld.Debug['v'] != 0 {
-			fmt.Fprintf(&ld.Bso, "%5.2f dwarf\n", obj.Cputime())
-		}
-
-		dwarfoff := ld.Rnd(int64(uint64(ld.HEADR)+ld.Segtext.Length), int64(ld.INITRND)) + ld.Rnd(int64(ld.Segdata.Filelen), int64(ld.INITRND))
-		ld.Cseek(dwarfoff)
-
-		ld.Segdwarf.Fileoff = uint64(ld.Cpos())
-		ld.Dwarfemitdebugsections()
-		ld.Segdwarf.Filelen = uint64(ld.Cpos()) - ld.Segdwarf.Fileoff
-
 		machlink = ld.Domacholink()
 	}
 
@@ -696,7 +682,7 @@ func asmb() {
 	symo := int64(0)
 	if ld.Debug['s'] == 0 {
 		if ld.Debug['v'] != 0 {
-			fmt.Fprintf(&ld.Bso, "%5.2f sym\n", obj.Cputime())
+			fmt.Fprintf(ld.Bso, "%5.2f sym\n", obj.Cputime())
 		}
 		ld.Bso.Flush()
 		switch ld.HEADTYPE {
@@ -715,11 +701,11 @@ func asmb() {
 			obj.Hdragonfly,
 			obj.Hsolaris,
 			obj.Hnacl:
-			symo = int64(ld.Segdata.Fileoff + ld.Segdata.Filelen)
+			symo = int64(ld.Segdwarf.Fileoff + ld.Segdwarf.Filelen)
 			symo = ld.Rnd(symo, int64(ld.INITRND))
 
 		case obj.Hwindows:
-			symo = int64(ld.Segdata.Fileoff + ld.Segdata.Filelen)
+			symo = int64(ld.Segdwarf.Fileoff + ld.Segdwarf.Filelen)
 			symo = ld.Rnd(symo, ld.PEFILEALIGN)
 		}
 
@@ -733,10 +719,8 @@ func asmb() {
 				ld.Cwrite(ld.Elfstrdat)
 
 				if ld.Debug['v'] != 0 {
-					fmt.Fprintf(&ld.Bso, "%5.2f dwarf\n", obj.Cputime())
+					fmt.Fprintf(ld.Bso, "%5.2f dwarf\n", obj.Cputime())
 				}
-
-				ld.Dwarfemitdebugsections()
 
 				if ld.Linkmode == ld.LinkExternal {
 					ld.Elfemitreloc()
@@ -751,7 +735,7 @@ func asmb() {
 			if sym != nil {
 				ld.Lcsize = int32(len(sym.P))
 				for i := 0; int32(i) < ld.Lcsize; i++ {
-					ld.Cput(uint8(sym.P[i]))
+					ld.Cput(sym.P[i])
 				}
 
 				ld.Cflush()
@@ -759,10 +743,8 @@ func asmb() {
 
 		case obj.Hwindows:
 			if ld.Debug['v'] != 0 {
-				fmt.Fprintf(&ld.Bso, "%5.2f dwarf\n", obj.Cputime())
+				fmt.Fprintf(ld.Bso, "%5.2f dwarf\n", obj.Cputime())
 			}
-
-			ld.Dwarfemitdebugsections()
 
 		case obj.Hdarwin:
 			if ld.Linkmode == ld.LinkExternal {
@@ -772,7 +754,7 @@ func asmb() {
 	}
 
 	if ld.Debug['v'] != 0 {
-		fmt.Fprintf(&ld.Bso, "%5.2f headr\n", obj.Cputime())
+		fmt.Fprintf(ld.Bso, "%5.2f headr\n", obj.Cputime())
 	}
 	ld.Bso.Flush()
 	ld.Cseek(0)

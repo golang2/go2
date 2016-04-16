@@ -5,6 +5,7 @@
 package net
 
 import (
+	"internal/testenv"
 	"reflect"
 	"runtime"
 	"testing"
@@ -56,6 +57,10 @@ type routeStats struct {
 }
 
 func TestInterfaces(t *testing.T) {
+	if runtime.GOOS == "freebsd" && runtime.GOARCH == "arm" {
+		// 100% flaky, actually, at least on some FreeBSD versions
+		testenv.SkipFlaky(t, 15262)
+	}
 	ift, err := Interfaces()
 	if err != nil {
 		t.Fatal(err)
@@ -178,10 +183,16 @@ func testInterfaceMulticastAddrs(t *testing.T, ifi *Interface) (nmaf4, nmaf6 int
 }
 
 func testAddrs(t *testing.T, ifat []Addr) (naf4, naf6 int) {
+	// Note: BSD variants allow assigning any IPv4/IPv6 address
+	// prefix to IP interface. For example,
+	//   - 0.0.0.0/0 through 255.255.255.255/32
+	//   - ::/0 through ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff/128
+	// In other words, there is no tightly-coupled combination of
+	// interface address prefixes and connected routes.
 	for _, ifa := range ifat {
 		switch ifa := ifa.(type) {
 		case *IPNet:
-			if ifa == nil || ifa.IP == nil || ifa.IP.IsUnspecified() || ifa.IP.IsMulticast() || ifa.Mask == nil {
+			if ifa == nil || ifa.IP == nil || ifa.IP.IsMulticast() || ifa.Mask == nil {
 				t.Errorf("unexpected value: %#v", ifa)
 				continue
 			}
@@ -214,7 +225,7 @@ func testAddrs(t *testing.T, ifat []Addr) (naf4, naf6 int) {
 			}
 			t.Logf("interface address %q", ifa.String())
 		case *IPAddr:
-			if ifa == nil || ifa.IP == nil || ifa.IP.IsUnspecified() || ifa.IP.IsMulticast() {
+			if ifa == nil || ifa.IP == nil || ifa.IP.IsMulticast() {
 				t.Errorf("unexpected value: %#v", ifa)
 				continue
 			}
